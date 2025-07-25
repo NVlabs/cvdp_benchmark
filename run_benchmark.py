@@ -75,6 +75,8 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
                 # Run all tests
                 res = self.repo.all_run(self.model)
             else:
+                self.repo.process_json()
+
                 with open (runs_file, 'r+') as runs_f:
                     runs = runs_f.readlines()
 
@@ -151,28 +153,9 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
                     self.repo.th_agent(issue)
             
             result = self.repo.run(issue, obj, repo, self.model)
-            
-            # Store this single result in a raw_result file
-            with open(raw_result_path, "a+") as f:
-                # Try to load existing file first
-                try:
-                    f.seek(0)
-                    content = f.read()
-                    if content:
-                        all_results = json.loads(content)
-                    else:
-                        all_results = {}
-                except json.JSONDecodeError:
-                    all_results = {}
-                
-                # Update with new result and write back
-                all_results[issue] = result
-                f.seek(0)
-                f.truncate()
-                f.write(json.dumps(all_results, indent=2))
-            
-            return result
         else:
+            self.repo.process_json()
+
             with open(runs_file, 'r+') as runs_f:
                 runs = runs_f.readlines()
 
@@ -186,7 +169,28 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
                 (obj, repo) = self.repo.set_repo(id=id, context=vlt)
                 self.repo.runs[id] = {'obj': obj, 'repo': repo, 'input': vlt['input'], 'output': vlt['output']}
 
-            return self.repo.run(issue, self.repo.runs[issue]['obj'], self.repo.runs[issue]['repo'], self.model)
+            result = self.repo.run(issue, self.repo.runs[issue]['obj'], self.repo.runs[issue]['repo'], self.model)
+        
+        # Store this single result in a raw_result file
+        with open(raw_result_path, "a+") as f:
+            # Try to load existing file first
+            try:
+                f.seek(0)
+                content = f.read()
+                if content:
+                    all_results = json.loads(content)
+                else:
+                    all_results = {}
+            except json.JSONDecodeError:
+                all_results = {}
+            
+            # Update with new result and write back
+            all_results[issue] = result
+            f.seek(0)
+            f.truncate()
+            f.write(json.dumps(all_results, indent=2))
+        
+        return result
 
 class AgenticBenchmark(wrapper.AgenticWrapper):
     def execute_single(self, issue, runs_file=None):

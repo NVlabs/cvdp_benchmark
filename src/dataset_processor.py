@@ -475,13 +475,9 @@ When generating files, return the file name in the correct place at the folder s
         # Extract Context Information
         (harness, name, issue, _) = self.extract_datapoint(id)
 
-        if not id in self.files:
+        if id not in self.files:
             print(f"Recreating harness environment for datapoint: {name}_{str(issue).zfill(4)}")
-            self.files [id] = context ['input']
-
-            # Replicate Results
-            for file, content in context ['output'].items():
-                self.files [file] = content
+            self.files[id] = context.get('output', {})
 
         return self.create_repository(id, harness, name, issue)
 
