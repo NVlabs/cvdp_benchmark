@@ -1,6 +1,6 @@
 # Agentic Workflow Guide
 
-The agentic workflow evaluates custom Docker-based agents on hardware verification challenges.
+A - The agentic workflow evaluates custom Docker-based agents on hardware verification challenges.
 
 ## Overview
 
