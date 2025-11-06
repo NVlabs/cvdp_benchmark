@@ -159,8 +159,7 @@ An example response is:
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.1  # Low temperature for consistent scoring
+                ]
             )
             
             result_text = completion.choices[0].message.content

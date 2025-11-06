@@ -231,7 +231,7 @@ When generating files, return the file name in the correct place at the folder s
         This method can be overridden by subclasses to provide custom model selection logic.
         
         Returns:
-            str: Model configuration string (e.g., "sbj_score_gpt-4o-mini")
+            str: Model configuration string (e.g., "sbj_score_gpt-o4-mini")
         """
         return config.get('SUBJECTIVE_SCORING_MODEL')
     
@@ -1116,6 +1116,22 @@ class CopilotProcessor (DatasetProcessor):
             prompt += f"\nProvide me one answer for this request: {context['input']['prompt']}\n"
             files   = list(context['output']['context'].keys())
 
+            # ----------------------------------------
+            # - Special handling for code comprehension categories
+            # ----------------------------------------
+            # For code comprehension categories, we want the response to go into subjective.txt
+            # rather than into the patch files listed in output context
+            cat = None
+            is_code_comprehension = False
+            if 'categories' in context and context['categories'] and isinstance(context['categories'][0], str) and context['categories'][0].startswith('cid'):
+                cat = int(context['categories'][0][3:])
+                is_code_comprehension = cat in CODE_COMPREHENSION_CATEGORIES
+            
+            if is_code_comprehension:
+                # Override files list to empty - this will trigger response mode
+                # and the response will be captured in subjective.txt
+                files = []
+
             # Determine schema based on the number of files
             schema_to_use, no_schema = self.determine_schema(files)
             
@@ -1125,7 +1141,11 @@ class CopilotProcessor (DatasetProcessor):
             elif len(files) > 1:
                 prompt += f"Name the files as: {files}.\n"
             else:
-                prompt += "Provide your response below.\n"
+                # For code comprehension, explicitly request the response format
+                if is_code_comprehension:
+                    prompt += "Provide your response using the format: { \"response\": \"<your answer here>\" }\n"
+                else:
+                    prompt += "Provide your response below.\n"
 
             folders = { 'prompts' : os.path.join(issue_dir, "prompts") }
 

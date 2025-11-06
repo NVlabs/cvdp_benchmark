@@ -112,7 +112,7 @@ class ConfigManager:
                            description="Number of parallel threads for benchmark execution")
         self.register_config("BENCHMARK_PREFIX", default="work", type_cast=str,
                            description="Prefix for output directories")
-        self.register_config("DEFAULT_MODEL", default="gpt-4o-mini", type_cast=str,
+        self.register_config("DEFAULT_MODEL", default="o4-mini", type_cast=str,
                            description="Default model to use when none is specified")
         self.register_config("CUSTOM_MODEL_FACTORY", required=False,
                            description="Path to custom model factory implementation")
