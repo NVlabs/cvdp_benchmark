@@ -1638,6 +1638,7 @@ class AgenticProcessor (DatasetProcessor):
                             './docs:/code/docs',
                             './rtl:/code/rtl',
                             './verif:/code/verif',
+                            './src:/code/src',
                             './rundir:/code/rundir',
                             './prompt.json:/code/prompt.json'
                         ],
