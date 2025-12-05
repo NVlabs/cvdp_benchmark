@@ -17,6 +17,7 @@
 
 import json
 import os
+import statistics
 from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -298,6 +299,14 @@ class ResultParser:
             print("Warning: No samples found in the composite report. Cannot calculate pass@k metrics.")
             return
 
+        # Validate n_samples matches actual sample count
+        if self.n_samples == 0:
+            print(f"Warning: n_samples is 0 in metadata. Using actual sample count: {len(samples)}")
+            self.n_samples = len(samples)
+        elif self.n_samples != len(samples):
+            print(f"Warning: n_samples in metadata ({self.n_samples}) doesn't match actual samples ({len(samples)}). Using actual count.")
+            self.n_samples = len(samples)
+
         # Get all unique problem IDs and their metadata from the reports
         problem_ids = {}  # Maps problem_id -> {category, difficulty}
         
@@ -391,7 +400,11 @@ class ResultParser:
                                 # If this is a new problem, add it
                                 if problem_id not in problem_ids:
                                     problem_ids[problem_id] = {"category": category, "difficulty": difficulty}
-                                # If this problem was previously set to medium (default), update it
+                                    # Check if this category is score-based
+                                    if is_category_score_based(category):
+                                        problem_ids[problem_id]["is_score_based"] = True
+                                # Handle cross-sample difficulty conflicts
+                                # Prefer non-medium difficulties when there's a conflict
                                 elif problem_ids[problem_id]["difficulty"] == "medium" and difficulty != "medium":
                                     problem_ids[problem_id]["difficulty"] = difficulty
         
@@ -810,6 +823,7 @@ class ResultParser:
         # Create table header
         headers = ["Sample #", "Total Problems", "Passed Problems", "Pass Rate", "Prefix"]
         table_data = []
+        pass_rates = []  # Track pass rates for stddev calculation
         
         # Process each sample
         for sample in samples:
@@ -832,6 +846,7 @@ class ResultParser:
             pass_rate = 0
             if total_problems > 0:
                 pass_rate = (passed_problems / total_problems) * 100
+                pass_rates.append(pass_rate)
                 
             # Get prefix for this sample
             prefix = self.sample_prefixes[sample_index] if sample_index < len(self.sample_prefixes) else "default"
@@ -850,6 +865,104 @@ class ResultParser:
         
         # Print table
         print(tabulate(table_data, headers=headers, tablefmt="grid"))
+        
+        # Print summary statistics
+        if len(pass_rates) > 1:
+            mean_pass_rate = statistics.mean(pass_rates)
+            stddev_pass_rate = statistics.stdev(pass_rates)
+            print(f"\nPass Rate Statistics: Mean = {mean_pass_rate:.2f}%, StdDev = {stddev_pass_rate:.2f}%")
+    
+    def get_per_sample_statistics(self) -> Dict[str, Any]:
+        """Calculate per-sample statistics for stddev calculations in composite reports."""
+        if not self.is_composite or 'samples' not in self.raw_results:
+            return {}
+            
+        samples = self.raw_results.get('samples', [])
+        if not samples:
+            return {}
+        
+        # Initialize data structures to track per-sample pass rates
+        per_sample_stats = {
+            'overall': [],
+            'by_difficulty': {
+                'easy': [],
+                'medium': [],
+                'hard': []
+            },
+            'by_category': defaultdict(list),
+            'by_category_difficulty': defaultdict(lambda: defaultdict(list))
+        }
+        
+        # Process each sample
+        for sample in samples:
+            # Track overall stats for this sample
+            sample_total_problems = 0
+            sample_passed_problems = 0
+            
+            # Track by difficulty for this sample
+            difficulty_stats = {
+                'easy': {'total': 0, 'passed': 0},
+                'medium': {'total': 0, 'passed': 0},
+                'hard': {'total': 0, 'passed': 0}
+            }
+            
+            # Track by category for this sample
+            category_stats = defaultdict(lambda: {'total': 0, 'passed': 0})
+            
+            # Track by category-difficulty for this sample
+            category_difficulty_stats = defaultdict(lambda: defaultdict(lambda: {'total': 0, 'passed': 0}))
+            
+            for cid, results in sample.items():
+                if cid in ['metadata', 'sample_index', 'test_details']:
+                    continue
+                    
+                for difficulty in ['easy', 'medium', 'hard']:
+                    if difficulty in results:
+                        total = results[difficulty].get('Total Problems', 0)
+                        passed = results[difficulty].get('Passed Problems', 0)
+                        
+                        # Update overall
+                        sample_total_problems += total
+                        sample_passed_problems += passed
+                        
+                        # Update by difficulty
+                        difficulty_stats[difficulty]['total'] += total
+                        difficulty_stats[difficulty]['passed'] += passed
+                        
+                        # Update by category
+                        category_stats[cid]['total'] += total
+                        category_stats[cid]['passed'] += passed
+                        
+                        # Update by category-difficulty
+                        category_difficulty_stats[cid][difficulty]['total'] += total
+                        category_difficulty_stats[cid][difficulty]['passed'] += passed
+            
+            # Calculate and store pass rates for this sample
+            if sample_total_problems > 0:
+                per_sample_stats['overall'].append(
+                    (sample_passed_problems / sample_total_problems) * 100
+                )
+            
+            for difficulty in ['easy', 'medium', 'hard']:
+                if difficulty_stats[difficulty]['total'] > 0:
+                    per_sample_stats['by_difficulty'][difficulty].append(
+                        (difficulty_stats[difficulty]['passed'] / difficulty_stats[difficulty]['total']) * 100
+                    )
+            
+            for cid, stats in category_stats.items():
+                if stats['total'] > 0:
+                    per_sample_stats['by_category'][cid].append(
+                        (stats['passed'] / stats['total']) * 100
+                    )
+            
+            for cid, diff_stats in category_difficulty_stats.items():
+                for difficulty, stats in diff_stats.items():
+                    if stats['total'] > 0:
+                        per_sample_stats['by_category_difficulty'][cid][difficulty].append(
+                            (stats['passed'] / stats['total']) * 100
+                        )
+        
+        return per_sample_stats
     
     def get_difficulty_totals(self) -> Dict[str, Dict[str, Any]]:
         """Calculate the total stats for each difficulty level across all categories."""
@@ -862,7 +975,8 @@ class ResultParser:
                 'passed_problems': 0,
                 'failed_problems': 0, 
                 'total_problems': 0,
-                'problem_pass_percentage': 0.0
+                'problem_pass_percentage': 0.0,
+                'stddev': None
             },
             'medium': {
                 'passed_tests': 0,
@@ -872,7 +986,8 @@ class ResultParser:
                 'passed_problems': 0,
                 'failed_problems': 0,
                 'total_problems': 0,
-                'problem_pass_percentage': 0.0
+                'problem_pass_percentage': 0.0,
+                'stddev': None
             },
             'hard': {
                 'passed_tests': 0,
@@ -882,7 +997,8 @@ class ResultParser:
                 'passed_problems': 0,
                 'failed_problems': 0,
                 'total_problems': 0,
-                'problem_pass_percentage': 0.0
+                'problem_pass_percentage': 0.0,
+                'stddev': None
             }
         }
         
@@ -908,6 +1024,14 @@ class ResultParser:
                 
             if stats['total_problems'] > 0:
                 stats['problem_pass_percentage'] = (stats['passed_problems'] / stats['total_problems']) * 100
+        
+        # Calculate stddev for composite reports
+        if self.is_composite:
+            per_sample_stats = self.get_per_sample_statistics()
+            for difficulty in ['easy', 'medium', 'hard']:
+                pass_rates = per_sample_stats.get('by_difficulty', {}).get(difficulty, [])
+                if len(pass_rates) > 1:
+                    difficulty_totals[difficulty]['stddev'] = statistics.stdev(pass_rates)
                 
         return difficulty_totals
     
@@ -942,6 +1066,14 @@ class ResultParser:
             ["Problem Pass Rate", f"{summary['overall']['overall_problem_pass_percentage']:.2f}%"]
         ]
         
+        # Add stddev for composite reports
+        if self.is_composite:
+            per_sample_stats = self.get_per_sample_statistics()
+            overall_pass_rates = per_sample_stats.get('overall', [])
+            if len(overall_pass_rates) > 1:
+                overall_stddev = statistics.stdev(overall_pass_rates)
+                overall_problems_data.append(["Pass Rate StdDev", f"{overall_stddev:.2f}%"])
+        
         # Add pass@k clarification for composite reports
         if self.is_composite:
             print(f"\n=== Overall Problem Statistics (Pass@{self.k_threshold}, n={self.n_samples}) ===")
@@ -957,23 +1089,32 @@ class ResultParser:
         for difficulty in ['easy', 'medium', 'hard']:
             stats = difficulty_totals[difficulty]
             if stats['total_problems'] > 0:
-                difficulty_totals_data.append([
+                row = [
                     difficulty.capitalize(),
                     stats['total_problems'],
                     round(stats['passed_problems'], 2),
                     round(stats['failed_problems'], 2),
                     f"{stats['problem_pass_percentage']:.2f}%"
-                ])
+                ]
+                # Add stddev for composite reports
+                if self.is_composite:
+                    if stats['stddev'] is not None:
+                        row.append(f"{stats['stddev']:.2f}%")
+                    else:
+                        row.append("N/A")
+                difficulty_totals_data.append(row)
         
         if difficulty_totals_data:
             if self.is_composite:
                 print(f"\n=== Problem Results by Difficulty (Pass@{self.k_threshold}, n={self.n_samples}) ===")
+                headers = ["Difficulty", "Total", "Pass", "Fail", "Rate", "StdDev"]
             else:
                 print("\n=== Problem Results by Difficulty ===")
+                headers = ["Difficulty", "Total", "Pass", "Fail", "Rate"]
                 
             print(tabulate(
                 difficulty_totals_data,
-                headers=["Difficulty", "Total", "Pass", "Fail", "Rate"],
+                headers=headers,
                 tablefmt="grid"
             ))
         
@@ -1000,6 +1141,12 @@ class ResultParser:
         # Category summary table for problems
         category_problem_data = []
         score_based_categories_found = False
+        
+        # Get per-sample statistics for stddev calculation if composite
+        per_sample_stats = None
+        if self.is_composite:
+            per_sample_stats = self.get_per_sample_statistics()
+        
         for cid in sorted(summary['categories'].keys()):
             stats = summary['categories'][cid]
             category_name = cid
@@ -1009,24 +1156,40 @@ class ResultParser:
             if self._is_score_based_category(cid):
                 category_name = f"{cid}*"
                 score_based_categories_found = True
-                
-            category_problem_data.append([
+            
+            row = [
                 category_name,
                 stats['total_problems'],
                 round(stats['total_passed_problems'], 2),
                 round(stats['total_failed_problems'], 2),
                 f"{stats['overall_problem_pass_percentage']:.2f}%"
-            ])
+            ]
+            
+            # Add stddev for composite reports
+            if self.is_composite:
+                if per_sample_stats:
+                    pass_rates = per_sample_stats.get('by_category', {}).get(cid, [])
+                    if len(pass_rates) > 1:
+                        stddev = statistics.stdev(pass_rates)
+                        row.append(f"{stddev:.2f}%")
+                    else:
+                        row.append("N/A")
+                else:
+                    row.append("N/A")
+                
+            category_problem_data.append(row)
         
         # Add pass@k clarification for composite reports
         if self.is_composite:
             print(f"\n=== Problem Results by Category (Pass@{self.k_threshold}, n={self.n_samples}) ===")
+            headers = ["Cat", "Total", "Pass", "Fail", "Rate", "StdDev"]
         else:
             print("\n=== Problem Results by Category ===")
+            headers = ["Cat", "Total", "Pass", "Fail", "Rate"]
             
         print(tabulate(
             category_problem_data,
-            headers=["Cat", "Total", "Pass", "Fail", "Rate"],
+            headers=headers,
             tablefmt="grid"
         ))
         
@@ -1076,6 +1239,11 @@ class ResultParser:
         # Complexity breakdown table with difficulties as columns for problems
         difficulty_problem_data = []
         score_based_categories_in_difficulty = False
+        
+        # Get per-sample statistics for stddev if composite
+        if self.is_composite and not per_sample_stats:
+            per_sample_stats = self.get_per_sample_statistics()
+        
         for cid in sorted(summary['categories'].keys()):
             stats = summary['categories'][cid]
             category_name = cid
@@ -1103,6 +1271,24 @@ class ResultParser:
                 else:
                     row.append('-')
             
+            # Add stddev columns for composite reports
+            if self.is_composite:
+                if per_sample_stats:
+                    for difficulty in ['easy', 'medium', 'hard']:
+                        if stats[difficulty]['total_problems'] > 0:
+                            pass_rates = per_sample_stats.get('by_category_difficulty', {}).get(cid, {}).get(difficulty, [])
+                            if len(pass_rates) > 1:
+                                stddev = statistics.stdev(pass_rates)
+                                row.append(f"{stddev:.2f}%")
+                            else:
+                                row.append("N/A")
+                        else:
+                            row.append('-')
+                else:
+                    # If no per_sample_stats, still need placeholders for the 3 stddev columns
+                    for difficulty in ['easy', 'medium', 'hard']:
+                        row.append("N/A")
+            
             difficulty_problem_data.append(row)
         
         # Add pass@k clarification for composite reports
@@ -1118,6 +1304,10 @@ class ResultParser:
         # Add headers for percentages
         for difficulty in ['Easy', 'Medium', 'Hard']:
             headers.append(f"{difficulty}%")
+        # Add headers for stddev (composite only)
+        if self.is_composite:
+            for difficulty in ['Easy', 'Medium', 'Hard']:
+                headers.append(f"{difficulty} SD")
             
         print(tabulate(
             difficulty_problem_data,
