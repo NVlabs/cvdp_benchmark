@@ -33,6 +33,7 @@ Transformations Applied:
     | raise TestFailure(...)                  | raise AssertionError(...)               |
     | cocotb.utils.get_sim_time()             | sim_time_utils.get_sim_time()           |
     | f"{dut.sig.value:#x}"                   | f"{int(dut.sig.value):#x}"              |
+    | dut.s_valid_o.value (boolean context)   | int(dut.s_valid_o.value)                |
 """
 
 import json
@@ -68,9 +69,16 @@ IMPORT_TRANSFORMS = [
 
 # API usage transformations (applied after imports)
 API_TRANSFORMS = [
+    # Packed signal bit access with .value after subscript: dut.sig[i].value -> dut.sig.value[i]
+    # This handles inout/wire signals that look like array access but are packed
+    (r'(dut\.gpio)\[(\w+)\]\.value', r'\1.value[\2]'),
+    (r'(dut\.s_axis_tvalid)\[(\w+)\]\.value', r'\1.value[\2]'),
+    (r'(dut\.s_axis_tlast)\[(\w+)\]\.value', r'\1.value[\2]'),
+    
     # LogicObject not subscriptable in 2.x: dut.sig[i] -> dut.sig.value[i]
-    (r'(dut\.\w+)\[(\d+)\]', r'\1.value[\2]'),
-    (r'(dut\.\w+)\[([a-zA-Z_]\w*)\]', r'\1.value[\2]'),
+    # Use negative lookahead (?!\.value) to NOT match when .value already follows (unpacked arrays)
+    (r'(dut\.\w+)\[(\d+)\](?!\.value)', r'\1.value[\2]'),
+    (r'(dut\.\w+)\[([a-zA-Z_]\w*)\](?!\.value)', r'\1.value[\2]'),
     
     # BinaryValue('Z') for hi-Z -> just 'Z' (must be before BinaryValue -> LogicArray)
     (r"BinaryValue\(['\"]Z['\"]\)", "'Z'"),
@@ -100,6 +108,20 @@ API_TRANSFORMS = [
     # (?<![.\w]) ensures we match full identifiers not preceded by . or other word chars
     # This avoids matching .value.is_resolvable (which works fine)
     (r'(?<![.\w])(\w+)\.is_resolvable', r"((\1.is_resolvable) if hasattr(\1, 'is_resolvable') else (str(\1) in ('0', '1')))"),
+    
+    # data_serializer specific: boolean context check with 3 chained signals
+    # "if dut.s_valid_o.value and dut.s_ready_i.value and dut.tx_en_i.value:"
+    # These Logic objects don't auto-convert to bool in cocotb 2.x
+    (r'if (dut\.s_valid_o\.value) and (dut\.s_ready_i\.value) and (dut\.tx_en_i\.value):',
+     r'if int(\1) and int(\2) and int(\3):'),
+    
+    # decode_firstbit specific: boolean context check for Out_Valid
+    # "if dut.Out_Valid.value:" -> "if int(dut.Out_Valid.value):"
+    (r'if (dut\.Out_Valid\.value):', r'if int(\1):'),
+    
+    # radix2_div specific: boolean context check for done signal
+    # "if dut.done.value:" -> "if int(dut.done.value):"
+    (r'if (dut\.done\.value):', r'if int(\1):'),
 ]
 
 
