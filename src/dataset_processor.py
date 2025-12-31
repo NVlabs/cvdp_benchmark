@@ -1963,12 +1963,21 @@ class AgenticProcessor (DatasetProcessor):
             script_file.write(f"echo \"Running agent with project name: {project_name}\"\n")
             script_file.write(f"# Get current user and group IDs\n")
             script_file.write(f"USER_ID=$(id -u)\n")
-            script_file.write(f"GROUP_ID=$(id -g)\n\n")
+            script_file.write(f"GROUP_ID=$(id -g)\n")
+            
+            # Add memory limits if configured
+            agent_memory_limit = config.get("DOCKER_AGENT_MEMORY_LIMIT")
+            memory_flags = ""
+            if agent_memory_limit:
+                memory_flags = f" --memory={agent_memory_limit} --memory-swap={agent_memory_limit}"
+                script_file.write(f"# Memory limit: {agent_memory_limit}\n")
+            script_file.write(f"\n")
+            
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
+            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm{memory_flags} --user $USER_ID:$GROUP_ID --entrypoint bash agent\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm --user $USER_ID:$GROUP_ID agent\n")
+            script_file.write(f"  docker compose -f {docker_compose_path} -p {project_name} run --rm{memory_flags} --user $USER_ID:$GROUP_ID agent\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")

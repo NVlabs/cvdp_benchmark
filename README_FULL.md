@@ -451,6 +451,8 @@ The benchmark includes automatic monitoring of Docker workspace directories to p
 - `DOCKER_QUOTA_THRESHOLD_MB` - Size limit before termination
 - `DOCKER_QUOTA_CHECK_INTERVAL` - Check frequency in seconds  
 - `DOCKER_QUOTA_MIN_COMPRESS_SIZE_MB` - Minimum file size for compression
+- `DOCKER_HARNESS_MEMORY_LIMIT` - Memory limit for harness Docker containers (e.g., '12g'). Sets both --memory and --memory-swap
+- `DOCKER_AGENT_MEMORY_LIMIT` - Memory limit for agent Docker containers (e.g., '12g'). Sets both --memory and --memory-swap
 
 For detailed configuration and implementation details, see [README_DEVELOPER.md](README_DEVELOPER.md).
 
