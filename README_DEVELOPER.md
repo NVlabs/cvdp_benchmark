@@ -196,8 +196,12 @@ The `dir_monitor.py` module provides automatic monitoring of Docker workspace di
 - `DOCKER_QUOTA_THRESHOLD_MB` - Size limit before termination (default: 50)
 - `DOCKER_QUOTA_CHECK_INTERVAL` - Check frequency in seconds (default: 1)
 - `DOCKER_QUOTA_MIN_COMPRESS_SIZE_MB` - Minimum file size for compression (default: 10)
+- `DOCKER_HARNESS_MEMORY_LIMIT` - Memory limit for harness Docker containers (e.g., '12g'). Sets both --memory and --memory-swap. If not set, no memory limits are applied (default: None)
+- `DOCKER_AGENT_MEMORY_LIMIT` - Memory limit for agent Docker containers (e.g., '12g'). Sets both --memory and --memory-swap. If not set, no memory limits are applied (default: None)
 
 **Note:** File compression is currently disabled by default in the codebase but can be enabled via the `compress_on_threshold` parameter.
+
+**Memory Quotas:** Memory limits can be set separately for harness and agent containers to prevent runaway memory usage from incorrectly generated Verilog code. When set, Docker will kill containers that exceed the specified memory limit. This helps prevent host system instability.
 
 ### Commercial EDA Tool Management
 

@@ -124,6 +124,10 @@ class ConfigManager:
                            description="Docker quota check interval in seconds")
         self.register_config("DOCKER_QUOTA_MIN_COMPRESS_SIZE_MB", default=10, type_cast=int,
                            description="Minimum file size in MB before compression")
+        self.register_config("DOCKER_HARNESS_MEMORY_LIMIT", default=None, type_cast=str,
+                           description="Memory limit for harness Docker containers (e.g., '12g'). Sets both --memory and --memory-swap")
+        self.register_config("DOCKER_AGENT_MEMORY_LIMIT", default=None, type_cast=str,
+                           description="Memory limit for agent Docker containers (e.g., '12g'). Sets both --memory and --memory-swap")
         
         # EDA Tool Infrastructure Configuration
         self.register_config("VERIF_EDA_IMAGE", default="cvdp-cadence-verif:latest", type_cast=str,
