@@ -20,20 +20,26 @@ Transforms test harnesses written for cocotb 1.x to work with cocotb 2.x.
 Creates a NEW modified dataset file (does not overwrite original).
 
 Transformations Applied:
-    | cocotb 1.x                              | cocotb 2.x                              |
-    |-----------------------------------------|-----------------------------------------|
-    | from cocotb.runner import               | from cocotb_tools.runner import         |
-    | from cocotb.binary import BinaryValue   | from cocotb.types import LogicArray     |
-    | from cocotb.result import TestFailure   | (removed - use AssertionError)          |
-    | import cocotb.utils                     | from cocotb import sim_time_utils       |
-    | dut.signal[i]                           | dut.signal.value[i]                     |
-    | BinaryValue('Z')                        | 'Z'                                     |
-    | BinaryValue(...)                        | LogicArray(...)                         |
-    | @cocotb.coroutine + async def           | async def (decorator removed)           |
-    | raise TestFailure(...)                  | raise AssertionError(...)               |
-    | cocotb.utils.get_sim_time()             | sim_time_utils.get_sim_time()           |
-    | f"{dut.sig.value:#x}"                   | f"{int(dut.sig.value):#x}"              |
-    | dut.s_valid_o.value (boolean context)   | int(dut.s_valid_o.value)                |
+    | cocotb 1.x                              | cocotb 2.x                                |
+    |-----------------------------------------|-------------------------------------------|
+    | from cocotb.runner import               | from cocotb_tools.runner import           |
+    | from cocotb.binary import BinaryValue   | from cocotb.types import LogicArray       |
+    | from cocotb.result import TestFailure   | (removed - use AssertionError)            |
+    | import cocotb.utils                     | from cocotb import sim_time_utils         |
+    | dut.signal[i]                           | dut.signal.value[i]                       |
+    | BinaryValue('Z')                        | 'Z'                                       |
+    | BinaryValue(...)                        | LogicArray(...)                           |
+    | @cocotb.coroutine + async def           | async def (decorator removed)             |
+    | raise TestFailure(...)                  | raise AssertionError(...)                 |
+    | cocotb.utils.get_sim_time()             | sim_time_utils.get_sim_time()             |
+    | f"{dut.sig.value:#x}"                   | f"{int(dut.sig.value):#x}"                | 
+    | dut.s_valid_o.value (boolean context)   | int(dut.s_valid_o.value)                  |
+    | from cocotb.result import A, TestFailure| from cocotb.result import A               |
+    | received_PSLVERR = dut.PSLVERR          | received_PSLVERR = int(dut.PSLVERR.value) |
+    | received_PREADY = dut.PREADY            | received_PREADY = int(dut.PREADY.value)   |
+    | actual_int = some.integer               | actual_int = int(some)                    |
+    | if dut.tx_start_o.value:                | if int(dut.tx_start_o.value) == 1:        |
+    | TOPLEVEL=findfasterclock in src/.env    | TOPLEVEL=FindFasterClock                  |
 """
 
 import json
@@ -59,6 +65,9 @@ IMPORT_TRANSFORMS = [
     (r'import cocotb\.binary', 'import cocotb.types'),
     
     # TestFailure removed - delete import
+    # Handle multi-import lines: remove TestFailure but keep others (and clean commas)
+    (r'(?m)^from cocotb\.result import ([^\n]*?)\bTestFailure\b\s*,\s*', r'from cocotb.result import \1'),
+    (r'(?m)^from cocotb\.result import\s*([^;\n]*?),\s*\bTestFailure\b\s*$', r'from cocotb.result import \1'),
     (r'from cocotb\.result import TestFailure\n?', ''),
     (r'from cocotb\.result import.*,\s*TestFailure', 'from cocotb.result import'),
     
@@ -122,7 +131,52 @@ API_TRANSFORMS = [
     # radix2_div specific: boolean context check for done signal
     # "if dut.done.value:" -> "if int(dut.done.value):"
     (r'if (dut\.done\.value):', r'if int(\1):'),
+
+    # apb_dsp_op / similar: comparing handle to int can be falsey even when value is 1
+    (r'(?m)^(\s*)received_PSLVERR\s*=\s*dut\.PSLVERR\s*$', r'\1received_PSLVERR = int(dut.PSLVERR.value)'),
+    (r'(?m)^(\s*)received_PREADY\s*=\s*dut\.PREADY\s*$', r'\1received_PREADY = int(dut.PREADY.value)'),
+
+    (r'(?m)^(\s*actual_int\s*=\s*)(\w+)\.integer\s*$', r'\1int(\2)'),
+
+    # packet_controller / check_no_response: cocotb 2.x LogicObject isn't truthy
+    (r'(?m)^(\s*)if\s+dut\.tx_start_o\.value\s*:\s*$',
+     r'\1if int(dut.tx_start_o.value) == 1:'),
 ]
+
+# =============================================================================
+# TASK-SPECIFIC FIXES
+# =============================================================================
+
+def fix_findfasterclock_env(problem_id: str, harness: Dict) -> Tuple[Dict, List[str]]:
+    """
+    Special case:
+      - For cvdp_copilot_findfasterclock_0001, ensure TOPLEVEL in src/.env is FindFasterClock
+        (some datasets incorrectly use findfasterclock).
+    """
+    if problem_id != "cvdp_copilot_findfasterclock_0001":
+        return harness, []
+    if not isinstance(harness, dict) or "files" not in harness or not isinstance(harness["files"], dict):
+        return harness, []
+
+    env_key = "src/.env"
+    env = harness["files"].get(env_key)
+    if not isinstance(env, str):
+        return harness, []
+
+    # Replace only if TOPLEVEL is exactly "findfasterclock" (case-sensitive), preserving formatting.
+    new_env, n = re.subn(
+        r"(?m)^(\s*TOPLEVEL\s*=\s*)findfasterclock(\s*)$",
+        r"\1FindFasterClock\2",
+        env,
+    )
+    if n == 0:
+        return harness, []
+
+    harness = harness.copy()
+    files = harness["files"].copy()
+    files[env_key] = new_env
+    harness["files"] = files
+    return harness, [f"  {env_key}: TOPLEVEL findfasterclock -> FindFasterClock"]
 
 
 # =============================================================================
@@ -246,6 +300,14 @@ def process_dataset(input_path: str, output_path: str, dry_run: bool = False,
                 
                 was_modified = False
                 if 'harness' in problem:
+                    # Task-specific env fix (must run before/after harness fixes; independent)
+                    problem['harness'], env_changes = fix_findfasterclock_env(problem_id, problem['harness'])
+                    if env_changes:
+                        was_modified = True
+                        stats['modified'] += 1
+                        stats['changes'].append(f"[{problem_id}]")
+                        stats['changes'].extend(env_changes)
+
                     problem['harness'], changes = fix_harness(problem['harness'])
                     if changes:
                         was_modified = True
