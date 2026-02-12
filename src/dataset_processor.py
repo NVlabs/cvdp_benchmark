@@ -1617,7 +1617,9 @@ class AgenticProcessor (DatasetProcessor):
                         ],
                         'working_dir': '/code',
                         'environment': {
-                            'OPENAI_USER_KEY': config.get('OPENAI_USER_KEY', '')
+                            'OPENAI_USER_KEY': config.get('OPENAI_USER_KEY', ''),
+                            'ANTHROPIC_API_KEY': config.get('ANTHROPIC_API_KEY', ''),
+                            'CLAUDE_CODE_MAX_TURNS': os.environ.get('CLAUDE_CODE_MAX_TURNS', ''),
                         }
                     }
                 },
@@ -1643,7 +1645,9 @@ class AgenticProcessor (DatasetProcessor):
                         ],
                         'working_dir': '/code',
                         'environment': {
-                            'OPENAI_USER_KEY': config.get('OPENAI_USER_KEY', '')
+                            'OPENAI_USER_KEY': config.get('OPENAI_USER_KEY', ''),
+                            'ANTHROPIC_API_KEY': config.get('ANTHROPIC_API_KEY', ''),
+                            'CLAUDE_CODE_MAX_TURNS': os.environ.get('CLAUDE_CODE_MAX_TURNS', ''),
                         }
                     }
                 }
