@@ -5,9 +5,9 @@
 
 set -e
 
-# Default license server
-CDS_LIC_FILE="${CDS_LIC_FILE:-5280@10.4.120.82}"
-LM_LICENSE_FILE="${LM_LICENSE_FILE:-5280@10.4.120.82}"
+# Default license server (override by setting env vars before running this script)
+CDS_LIC_FILE="${CDS_LIC_FILE:-5280@your-license-server}"
+LM_LICENSE_FILE="${LM_LICENSE_FILE:-5280@your-license-server}"
 
 echo "Building Claude Code agent Docker images..."
 echo ""
