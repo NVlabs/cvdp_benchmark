@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Migrate cocotb v1 API calls to cocotb v2.0 in CVDP JSONL dataset files.
 
 This script processes JSONL dataset files and updates all Python test harness
@@ -85,17 +88,13 @@ def migrate_python_source(text: str) -> str:
         text,
     )
 
-    # 7. cocotb.runner — use a sentinel to avoid double-replacement
-    _RUNNER_SENTINEL = "from __cocotb_runner_migrated__ import get_runner"
-    text = text.replace(
-        "from cocotb.runner import get_runner",
-        _RUNNER_SENTINEL,
-    )
-    text = text.replace(
-        _RUNNER_SENTINEL,
-        "try:\n    from cocotb_tools.runner import get_runner\n"
-        "except ImportError:\n    from cocotb.runner import get_runner",
-    )
+    # 7. cocotb.runner -> cocotb_tools.runner (guard against double-replacement)
+    if "from cocotb.runner import get_runner" in text and "from cocotb_tools.runner" not in text:
+        text = text.replace(
+            "from cocotb.runner import get_runner",
+            "try:\n    from cocotb_tools.runner import get_runner\n"
+            "except ImportError:\n    from cocotb.runner import get_runner",
+        )
 
     # 8. Timer(0, ...) -> Timer(1, unit="ps")
     # Match Timer(0, units="ns") or Timer(0, unit="ns") etc.
@@ -138,6 +137,22 @@ def migrate_python_source(text: str) -> str:
         'cocotb.start_soon(',
         text,
     )
+
+    # 12. Packed vector bit-indexing: dut.signal[N] no longer works in cocotb v2.
+    # Add a monkey-patch shim at the top of test files to restore v1 behavior.
+    if "import cocotb" in text:
+        packed_shim = (
+            "\n# cocotb v2: restore packed vector bit-indexing (read-only)\n"
+            "try:\n"
+            "    from cocotb.handle import LogicArrayObject as _LAO\n"
+            "    if not hasattr(_LAO, '_v1_getitem_patched'):\n"
+            "        _LAO.__getitem__ = lambda self, idx: self.value[idx]\n"
+            "        _LAO._v1_getitem_patched = True\n"
+            "except (ImportError, AttributeError):\n"
+            "    pass\n"
+        )
+        if packed_shim not in text:
+            text = packed_shim + text
 
     return text
 
@@ -233,5 +248,34 @@ def main():
           f"Python files across {total_stats['files']} JSONL files")
 
 
+def self_test():
+    """Quick smoke tests for migrate_python_source."""
+    # Idempotency: applying twice should be the same as once
+    samples = [
+        "from cocotb.runner import get_runner\n",
+        "import cocotb\nfrom cocotb.binary import BinaryValue\nx = dut.sig.value.integer\n",
+        "import cocotb\nfrom cocotb.result import TestFailure\nawait cocotb.start(coro())\n",
+        "import cocotb\n@cocotb.coroutine\ndef my_coro(dut):\n    yield Timer(0, units='ns')\n",
+        "import cocotb\nx = dut.out.value.to_unsigned()\ny = dut.out.value.signed_integer\n",
+    ]
+    for i, src in enumerate(samples):
+        once = migrate_python_source(src)
+        twice = migrate_python_source(once)
+        assert twice == once, f"Idempotency failed on sample {i}:\n---once---\n{once}\n---twice---\n{twice}"
+
+    # Specific transformations
+    assert "cocotb_tools.runner" in migrate_python_source("from cocotb.runner import get_runner\n")
+    assert "unit=" in migrate_python_source("import cocotb\nTimer(10, units='ns')\n")
+    assert 'unit="ps"' in migrate_python_source("import cocotb\nTimer(0)\n")
+    assert "start_soon" in migrate_python_source("import cocotb\nawait cocotb.start(x())\n")
+    assert "async def" in migrate_python_source("import cocotb\n@cocotb.coroutine\ndef foo(dut):\n    pass\n")
+    assert "int(dut.sig.value)" in migrate_python_source("import cocotb\ndut.sig.value.integer\n")
+
+    print("All self-tests passed.")
+
+
 if __name__ == "__main__":
-    main()
+    if "--self-test" in sys.argv:
+        self_test()
+    else:
+        main()
