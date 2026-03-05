@@ -266,6 +266,7 @@ python run_benchmark.py -f dataset.jsonl -l -m custom-model -c /path/to/factory.
 - **`merge_dataset_files.py`** - Combine multiple dataset files
 - **`refinement_analysis.py`** - Analyze iterative problem-solving patterns
 - **`jsonl_to_yaml.py`** - Convert JSONL datasets to human-readable YAML format and back
+- **`fix_cocotb2_compat.py`** - Fix cocotb 2.x compatibility issues in test harnesses
 
 #### Using jsonl_to_yaml.py
 
@@ -286,6 +287,21 @@ tools/jsonl_to_yaml.py dataset.jsonl --test-roundtrip
 ```
 
 The tool preserves all data and supports automatic file type detection. Use this when you need to manually inspect or edit dataset files in a more readable format.
+
+#### Using fix_cocotb2_compat.py
+
+Fix cocotb 2.x compatibility issues in test harnesses. The Docker image uses cocotb 2.x, but some harnesses were written for cocotb 1.x:
+
+```bash
+# Fix dataset and create new file
+tools/fix_cocotb2_compat.py datasets/input.jsonl -o datasets/fixed.jsonl
+
+# Preview changes without writing
+tools/fix_cocotb2_compat.py datasets/input.jsonl --dry-run -v
+
+# Only output problems that were modified (FOR TESTING)
+tools/fix_cocotb2_compat.py datasets/input.jsonl --modified-only
+```
 
 ### Developer Resources
 For internal development, architecture details, and contribution guidelines - see **[README_DEVELOPER.md](README_DEVELOPER.md)**
