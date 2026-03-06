@@ -35,5 +35,5 @@ ENV PATH=/venv/bin:$PATH
 COPY docker/requirements.txt /tmp/requirements.txt
 RUN uv pip sync --python /venv/bin/python /tmp/requirements.txt
 
-RUN mkdir -p /code /rundir/harness /src
+RUN mkdir -p /code /rundir/harness
 WORKDIR /code
