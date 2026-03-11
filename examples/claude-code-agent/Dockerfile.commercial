@@ -1,0 +1,97 @@
+FROM rockylinux/rockylinux:9
+
+WORKDIR /
+
+# Install system dependencies (same as cadence_docker base)
+RUN dnf update -y && dnf upgrade -y
+RUN dnf install -y --allowerasing \
+    ksh \
+    tcsh \
+    perl \
+    libnsl \
+    libxcrypt-compat \
+    which \
+    git \
+    make \
+    file \
+    coreutils \
+    iputils \
+    bind-utils \
+    curl \
+    ca-certificates
+
+# Required for lmstat
+RUN ln -s /lib64/ld-linux-x86-64.so.2 /lib64/ld-lsb-x86-64.so.3
+
+# Cadence tools will be mounted at runtime from /opt/cadence/installs
+# Set PATH to access the tools (use 64-bit binaries)
+ENV PATH="$PATH:/opt/cadence/installs/XCELIUM2403/tools.lnx86/inca/bin/64bit"
+ENV PATH="$PATH:/opt/cadence/installs/XCELIUMML2403/tools.lnx86/bin"
+ENV PATH="$PATH:/opt/cadence/installs/VMANAGER2403/bin"
+
+# Set MDV_XLM_HOME for Xcelium coverage analysis
+ENV MDV_XLM_HOME="/opt/cadence/installs/XCELIUM2403"
+
+# License server configuration - set as build args
+ARG CDS_LIC_FILE
+ARG LM_LICENSE_FILE
+RUN test -n "$CDS_LIC_FILE" || (echo "ERROR: CDS_LIC_FILE build arg required" && exit 1)
+RUN test -n "$LM_LICENSE_FILE" || (echo "ERROR: LM_LICENSE_FILE build arg required" && exit 1)
+ENV CDS_LIC_FILE=$CDS_LIC_FILE
+ENV LM_LICENSE_FILE=$LM_LICENSE_FILE
+
+# ----------------------------------------
+# - Preparing Python Environment
+# ----------------------------------------
+
+RUN dnf -y install python3.12
+ADD https://bootstrap.pypa.io/get-pip.py get-pip.py
+RUN python3 ./get-pip.py
+# Install cocotb 1.9.x which includes runner module, or install separately
+RUN python3 -m pip install pytest pytest-timeout "cocotb<2.0" || \
+    python3 -m pip install pytest pytest-timeout cocotb cocotb-runner
+
+# ----------------------------------------
+# - Install Claude Code CLI
+# ----------------------------------------
+
+# Install Node.js 20.x (required for Claude Code which needs >= 18)
+RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && \
+    dnf install -y nodejs && \
+    dnf clean all
+
+# Verify Node.js version
+RUN node --version && npm --version
+
+# Install Claude Code CLI via npm
+RUN npm install -g @anthropic-ai/claude-code
+
+# Verify Claude installation
+RUN which claude && claude --version
+
+# Create a non-root user for Claude (required for --dangerously-skip-permissions)
+RUN useradd -m -u 1001 -s /bin/bash claude && \
+    mkdir -p /home/claude/.config/claude && \
+    chown -R claude:claude /home/claude && \
+    chmod 755 /home/claude && \
+    chmod -R u+w /home/claude
+
+ENV HOME=/home/claude
+
+# Copy agent wrapper
+WORKDIR /app
+COPY agent.py .
+RUN chmod +x agent.py && chown claude:claude agent.py
+
+# Create /code directory and set permissions
+RUN mkdir -p /code && chown -R claude:claude /code
+
+# Set environment variable to indicate we're in a container with EDA tools
+ENV CLAUDE_CODE_CONTAINER=1
+ENV CLAUDE_CODE_COMMERCIAL=1
+
+# Switch to non-root user
+USER claude
+
+# Set the entrypoint
+ENTRYPOINT ["python3", "/app/agent.py"]
