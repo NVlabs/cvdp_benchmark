@@ -346,7 +346,7 @@ class Repository:
             if kill:
                 subprocess.run(kill, shell = True)
 
-            return p.returncode, pid
+            return 124, pid
 
         return p.returncode, pid
 
@@ -958,7 +958,7 @@ class Repository:
                 service_log = f'{logfile}{f"_{service}" if len(services) > 1 else ""}.txt'
                 opts   = self.docker_cmd(issue_path)
                 result = self.log_docker(docker, opts, service, service_log)
-                error += result['result']
+                error += int(result['result'] != 0)
                 results.append(result)
 
         else:
