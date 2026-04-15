@@ -1,4 +1,4 @@
-FROM ghcr.io/hdl/sim/osvb@sha256:6fc999d943f1b8f8c49e7221459ae01e57afd33f7e73c3734b9a65be25e7f434
+FROM nvidia/cvdp-sim:v1.0.0
 
 WORKDIR /app
 

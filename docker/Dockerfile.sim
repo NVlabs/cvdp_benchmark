@@ -33,7 +33,9 @@ RUN uv venv /venv
 ENV PATH=/venv/bin:$PATH
 
 COPY docker/requirements.txt /tmp/requirements.txt
-RUN uv pip sync --python /venv/bin/python /tmp/requirements.txt
+RUN uv pip sync --python /venv/bin/python /tmp/requirements.txt && \
+    /venv/bin/python -m ensurepip --upgrade && \
+    ln -sf /venv/bin/pip3 /venv/bin/pip
 
 RUN mkdir -p /code /rundir/harness
 WORKDIR /code
