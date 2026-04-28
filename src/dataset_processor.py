@@ -2331,6 +2331,11 @@ class AgenticProcessor (DatasetProcessor):
         commit_sha = getattr(self, "commit_hash", None) or ctx.get("context", {}).get("commit")
         data_point = id.split("_")
 
+        # Resolve bare repo name to full local path when CVDP_HEAVY_REPOS_PATH is set
+        cvdp_heavy_repos_path = config.get("CVDP_HEAVY_REPOS_PATH")
+        if cvdp_heavy_repos_path and repo_url and not os.path.isabs(repo_url) and "://" not in repo_url and "@" not in repo_url:
+            repo_url = os.path.join(cvdp_heavy_repos_path, repo_url)
+
         try:
             if not os.getenv("CLONE_HTTP") and "github.com/" in repo_url if repo_url else False:
                 repo_url   = repo_url.split("github.com/")[-1]
@@ -2348,8 +2353,14 @@ class AgenticProcessor (DatasetProcessor):
             # Get patches if available
             patches = ctx.get('patch', {}) if not self.disable_patch else {}
             
-            # Determine root directory (extract only external/ folder for CVDP repos)
-            root_dir = "external" if 'cvdp_' in repo_url or 'cvdp-' in repo_url else None
+            # Determine root directory (extract only external/ folder for CVDP repos).
+            # _ext_ repos (e.g. cvdp_agentic_heavy_ext_cheriot-ibex) ARE the external code
+            # at the repo root — no external/ subdirectory exists in them.
+            root_dir = (
+                "external"
+                if ('cvdp_' in repo_url or 'cvdp-' in repo_url) and '_ext_' not in repo_url
+                else None
+            )
             
             # Create the git workspace using the consolidated approach
             success = git_manager.create_volume_with_checkout(

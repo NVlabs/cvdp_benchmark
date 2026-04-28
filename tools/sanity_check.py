@@ -25,6 +25,9 @@ Examples:
 
   # Resume a partial run (skip already-completed work dirs):
   python tools/sanity_check.py -s -t 4
+
+  # Run against specific files (bypasses --dataset-dir discovery):
+  python tools/sanity_check.py path/to/dataset1.json path/to/dataset2.json -t 4
 """
 
 import argparse
@@ -166,6 +169,11 @@ def main() -> int:
         epilog=__doc__,
     )
     parser.add_argument(
+        "files",
+        nargs="*",
+        help="Dataset file(s) to check directly (bypasses --dataset-dir discovery)",
+    )
+    parser.add_argument(
         "--dataset-dir",
         default=DEFAULT_DATASET_DIR,
         help=f"Directory containing dataset files (default: {DEFAULT_DATASET_DIR})",
@@ -202,13 +210,21 @@ def main() -> int:
     if args.only_golden and args.only_nopatch:
         parser.error("--only-golden and --only-nopatch are mutually exclusive")
 
-    # Discover dataset files
-    dataset_files = discover_datasets(args.dataset_dir, args.filter_str)
-    if not dataset_files:
-        print(f"ERROR: No dataset files found in {args.dataset_dir} matching '{DATASET_GLOB}'")
-        if args.filter_str:
-            print(f"       (with filter: '{args.filter_str}')")
-        return 1
+    # Use explicit files if provided, otherwise discover from --dataset-dir
+    if args.files:
+        missing = [f for f in args.files if not os.path.isfile(f)]
+        if missing:
+            for f in missing:
+                print(f"ERROR: File not found: {f}")
+            return 1
+        dataset_files = [os.path.abspath(f) for f in args.files]
+    else:
+        dataset_files = discover_datasets(args.dataset_dir, args.filter_str)
+        if not dataset_files:
+            print(f"ERROR: No dataset files found in {args.dataset_dir} matching '{DATASET_GLOB}'")
+            if args.filter_str:
+                print(f"       (with filter: '{args.filter_str}')")
+            return 1
 
     modes = []
     if not args.only_nopatch:

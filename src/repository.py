@@ -9,6 +9,7 @@ import yaml
 import psutil
 from src import subjective
 from src import network_util
+from src import git_utils
 import dotenv
 from src.dir_monitor import DirectorySizeMonitor
 from src.config_manager import config
@@ -48,7 +49,7 @@ def apply_template_substitution(content: str) -> str:
     
     Replaces placeholders in the format __VARIABLE__ with configured values:
     - __VERIF_EDA_IMAGE__ -> VERIF_EDA_IMAGE config value
-    - __LICENSE_NETWORK__ -> LICENSE_NETWORK config value  
+    - __LICENSE_NETWORK__ -> LICENSE_NETWORK config value
     - __OSS_SIM_IMAGE__ -> OSS_SIM_IMAGE config value
     - __OSS_PNR_IMAGE__ -> OSS_PNR_IMAGE config value
     
@@ -63,7 +64,7 @@ def apply_template_substitution(content: str) -> str:
         '__VERIF_EDA_IMAGE__': config.get('VERIF_EDA_IMAGE'),
         '__LICENSE_NETWORK__': config.get('LICENSE_NETWORK'),
         '__OSS_SIM_IMAGE__': config.get('OSS_SIM_IMAGE'),
-        '__OSS_PNR_IMAGE__': config.get('OSS_PNR_IMAGE')
+        '__OSS_PNR_IMAGE__': config.get('OSS_PNR_IMAGE'),
     }
     
     # Apply substitutions for any placeholders found
@@ -547,28 +548,22 @@ class Repository:
             
             if repo_url and commit_hash:
                 # Find existing git cache mirror
+                # Compute the repo hash at generation time so the script points
+                # directly at the same mirror path used by GitRepositoryManager.
+                mirror_filename = git_utils.get_repo_mirror_filename(repo_url)
+
                 script_file.write("# Look for existing git cache mirror\n")
                 script_file.write("SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n")
                 script_file.write("WORK_DIR=\"$(dirname \"$(dirname \"$(dirname \"$SCRIPT_DIR\")\")\")\"  # Go up to work directory\n")
                 script_file.write("GIT_CACHE_DIR=\"$WORK_DIR/git_cache/mirrors\"\n")
-                script_file.write("MIRROR_DIR=\"\"\n\n")
-                
-                script_file.write("# Find the mirror directory (should be named with repo hash)\n")
-                script_file.write("if [ -d \"$GIT_CACHE_DIR\" ]; then\n")
-                script_file.write("  for mirror in \"$GIT_CACHE_DIR\"/*.git; do\n")
-                script_file.write("    if [ -d \"$mirror\" ]; then\n")
-                script_file.write("      MIRROR_DIR=\"$mirror\"\n")
-                script_file.write("      echo \"Found git cache mirror: $MIRROR_DIR\"\n")
-                script_file.write("      break\n")
-                script_file.write("    fi\n")
-                script_file.write("  done\n")
-                script_file.write("fi\n\n")
-                
-                script_file.write("if [ -z \"$MIRROR_DIR\" ]; then\n")
-                script_file.write("  echo \"ERROR: No git cache mirror found in $GIT_CACHE_DIR\"\n")
+                script_file.write(f"MIRROR_DIR=\"$GIT_CACHE_DIR/{mirror_filename}\"\n\n")
+
+                script_file.write("if [ ! -d \"$MIRROR_DIR\" ]; then\n")
+                script_file.write("  echo \"ERROR: Expected git cache mirror not found: $MIRROR_DIR\"\n")
                 script_file.write("  echo \"Please run the benchmark with -l -g first to create the git cache.\"\n")
                 script_file.write("  exit 1\n")
-                script_file.write("fi\n\n")
+                script_file.write("fi\n")
+                script_file.write("echo \"Found git cache mirror: $MIRROR_DIR\"\n\n")
                 
                 # Ensure patch_image exists
                 script_file.write("# Ensure patch_image Docker image exists\n")

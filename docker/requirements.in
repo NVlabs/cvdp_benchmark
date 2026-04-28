@@ -4,3 +4,6 @@ cocotb==2.0.1
 pytest==8.3.2
 aes
 coverage
+cocotb-bus==0.3.0
+cocotbext-axi==0.1.28
+cocotbext-pcie @ git+https://github.com/alexforencich/cocotbext-pcie.git@92732edd2d8cef002f0e984697ff31ccfe8a19a9

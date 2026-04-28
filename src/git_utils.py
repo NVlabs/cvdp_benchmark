@@ -24,6 +24,53 @@ from .config_manager import config
 _repo_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
+def get_repo_hash(repo_url: str) -> str:
+    """
+    Generate a consistent hash for a repository URL or local path key.
+
+    Args:
+        repo_url: Git repository URL or normalized local path
+
+    Returns:
+        8-character hex hash of the repository key
+    """
+    return hashlib.md5(repo_url.encode()).hexdigest()[:8]
+
+
+def normalize_repo_url(repo_url: str) -> str:
+    """
+    Normalize repository URL for consistent handling.
+
+    Args:
+        repo_url: Original repository URL
+
+    Returns:
+        Normalized repository URL (SSH vs HTTPS based on CLONE_HTTP env var)
+    """
+    try:
+        # Convert GitHub HTTPS URLs to SSH unless CLONE_HTTP is set
+        if not os.getenv("CLONE_HTTP") and "github.com/" in repo_url:
+            if repo_url.startswith("https://github.com/"):
+                repo_path = repo_url.replace("https://github.com/", "")
+                if not repo_path.endswith(".git"):
+                    repo_path += ".git"
+                return f"git@github.com:{repo_path}"
+            elif "github.com/" in repo_url and not repo_url.startswith("git@"):
+                repo_path = repo_url.split("github.com/")[-1]
+                if not repo_path.endswith(".git"):
+                    repo_path += ".git"
+                return f"git@github.com:{repo_path}"
+        return repo_url
+    except Exception:
+        return repo_url
+
+
+def get_repo_mirror_filename(repo_url: str) -> str:
+    """Return the mirror directory name used for a repository URL or local path."""
+    mirror_key = os.path.abspath(repo_url) if os.path.isdir(repo_url) else normalize_repo_url(repo_url)
+    return f"{get_repo_hash(mirror_key)}.git"
+
+
 class GitRepositoryManager:
     """
     Manages shared git repositories and Docker volumes for context-heavy agentic datapoints.
@@ -101,7 +148,7 @@ class GitRepositoryManager:
         Returns:
             8-character hex hash of the repository URL
         """
-        return hashlib.md5(repo_url.encode()).hexdigest()[:8]
+        return get_repo_hash(repo_url)
     
     def _normalize_repo_url(self, repo_url: str) -> str:
         """
@@ -113,43 +160,70 @@ class GitRepositoryManager:
         Returns:
             Normalized repository URL (SSH vs HTTPS based on CLONE_HTTP env var)
         """
-        try:
-            # Convert GitHub HTTPS URLs to SSH unless CLONE_HTTP is set
-            if not os.getenv("CLONE_HTTP") and "github.com/" in repo_url:
-                if repo_url.startswith("https://github.com/"):
-                    repo_path = repo_url.replace("https://github.com/", "")
-                    if not repo_path.endswith(".git"):
-                        repo_path += ".git"
-                    return f"git@github.com:{repo_path}"
-                elif "github.com/" in repo_url and not repo_url.startswith("git@"):
-                    repo_path = repo_url.split("github.com/")[-1]
-                    if not repo_path.endswith(".git"):
-                        repo_path += ".git"
-                    return f"git@github.com:{repo_path}"
-            return repo_url
-        except Exception:
-            return repo_url
+        return normalize_repo_url(repo_url)
     
     def get_or_create_mirror(self, repo_url: str) -> str:
         """
         Get or create a shared mirror for the given repository URL.
-        
+
         Args:
-            repo_url: Git repository URL
-            
+            repo_url: Git repository URL or local directory path
+
         Returns:
             Path to the shared mirror directory
         """
+        # Handle local directory paths — create a bare mirror from them
+        if os.path.isdir(repo_url):
+            abs_path = os.path.abspath(repo_url)
+            mirror_filename = get_repo_mirror_filename(repo_url)
+            repo_hash = mirror_filename.removesuffix(".git")
+            mirror_path = os.path.join(self.mirrors_dir, mirror_filename)
+            log_file = os.path.join(self.logs_dir, f"{repo_hash}_clone.log")
+
+            with _repo_locks[mirror_path]:
+                if not os.path.exists(mirror_path):
+                    print(f"[INFO] Creating mirror from local repo {abs_path}")
+                    with open(log_file, 'w') as logfile:
+                        try:
+                            subprocess.run(
+                                ["git", "clone", "--mirror", "--local", abs_path, mirror_path],
+                                check=True,
+                                stdout=logfile,
+                                stderr=subprocess.STDOUT,
+                                text=True
+                            )
+                            # Allow the patch container to fetch by SHA (orphan commits are
+                            # branch tips, so they're reachable from advertised refs)
+                            subprocess.run(
+                                ["git", "config", "uploadpack.allowReachableSHA1InWant", "true"],
+                                cwd=mirror_path,
+                                check=True,
+                                stdout=logfile,
+                                stderr=subprocess.STDOUT,
+                                text=True
+                            )
+                            print(f"[INFO] Successfully created mirror from local repo: {mirror_path}")
+                        except subprocess.CalledProcessError as e:
+                            print(f"[ERROR] Failed to mirror local repo {abs_path}: {e}")
+                            if os.path.exists(mirror_path):
+                                subprocess.run(["rm", "-rf", mirror_path], check=False)
+                            raise
+                else:
+                    print(f"[INFO] Using existing mirror for local repo: {mirror_path}")
+
+            return os.path.abspath(mirror_path)
+
         normalized_url = self._normalize_repo_url(repo_url)
-        repo_hash = self._get_repo_hash(normalized_url)
-        mirror_path = os.path.join(self.mirrors_dir, f"{repo_hash}.git")
+        mirror_filename = get_repo_mirror_filename(repo_url)
+        repo_hash = mirror_filename.removesuffix(".git")
+        mirror_path = os.path.join(self.mirrors_dir, mirror_filename)
         log_file = os.path.join(self.logs_dir, f"{repo_hash}_clone.log")
-        
+
         # Use per-repository locking to prevent concurrent operations
         with _repo_locks[mirror_path]:
             if not os.path.exists(mirror_path):
                 print(f"[INFO] Cloning {normalized_url} into shared mirror at {mirror_path}")
-                
+
                 with open(log_file, 'w') as logfile:
                     try:
                         subprocess.run(
@@ -183,7 +257,7 @@ class GitRepositoryManager:
                     except subprocess.CalledProcessError as e:
                         print(f"[WARNING] Failed to update mirror {mirror_path}: {e}")
                         # Don't fail on update errors - use existing mirror
-        
+
         return os.path.abspath(mirror_path)
     
     def create_volume_with_checkout(self, 
