@@ -1,0 +1,6 @@
+# Direct dependencies for nvidia/cvdp-sim. Edit here, then regenerate the lockfile:
+#   uv pip compile docker/requirements.in --generate-hashes -o docker/requirements.txt
+cocotb==2.0.1
+pytest==8.3.2
+aes
+coverage

@@ -132,7 +132,7 @@ class ConfigManager:
                            description="Docker network name for EDA license server connectivity")
         self.register_config("LICENSE_NETWORK_AUTO_CREATE", default=True, type_cast=bool,
                            description="Automatically create license network if it doesn't exist")
-        self.register_config("OSS_SIM_IMAGE", default="ghcr.io/hdl/sim/osvb", type_cast=str,
+        self.register_config("OSS_SIM_IMAGE", default="nvidia/cvdp-sim:v1.0.0", type_cast=str,
                            description="Docker image for simulation tasks with open-source EDA tools")
         self.register_config("OSS_PNR_IMAGE", default="ghcr.io/hdl/impl/pnr", type_cast=str,
                            description="Docker image for place-and-route tasks with open-source EDA tools")
