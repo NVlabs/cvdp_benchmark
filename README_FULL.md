@@ -228,8 +228,8 @@ cp .env.example .env
 - `VERIF_EDA_IMAGE` - Docker image for verification tasks with commercial EDA tools (default: "cvdp-cadence-verif:latest")
 - `LICENSE_NETWORK` - Docker network name for EDA license server connectivity (default: "licnetwork")
 - `LICENSE_NETWORK_AUTO_CREATE` - Automatically create license network if it doesn't exist (default: true)
-- `OSS_SIM_IMAGE` - Docker image for simulation tasks with open-source EDA tools (default: "ghcr.io/hdl/sim/osvb")
-- `OSS_PNR_IMAGE` - Docker image for place-and-route tasks with open-source EDA tools (default: "ghcr.io/hdl/impl/pnr")
+- `OSS_SIM_IMAGE` - Docker image for simulation tasks with open-source EDA tools (default: "nvidia/cvdp-sim:v1.0.0")
+- `OSS_PNR_IMAGE` - Docker image for place-and-route tasks with open-source EDA tools (default: "nvidia/cvdp-sim:v1.0.0")
 
 **Template Variables**
 - `__VERIF_EDA_IMAGE__` - Replaced with your configured `VERIF_EDA_IMAGE` value

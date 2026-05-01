@@ -1,4 +1,4 @@
-FROM gcr.io/hdl-containers/sim/osvb
+FROM nvidia/cvdp-sim:v1.0.0
 
 WORKDIR /app
 
