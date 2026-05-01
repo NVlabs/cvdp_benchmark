@@ -70,10 +70,10 @@ python run_benchmark.py -f dataset.jsonl -l -g my-agent
 
 ### Recommended Base Images for Agents
 
-**`ghcr.io/hdl/sim/osvb`** - Open Source Verification Base Image:
+**`nvidia/cvdp-sim:v1.0.0`** - CVDP v1.1.0 Open-Source Simulation Image:
 ```dockerfile
-# Use osvb as base for agents that need EDA tools
-FROM ghcr.io/hdl/sim/osvb
+# Use the CVDP simulation image as a base for agents that need open-source EDA tools
+FROM nvidia/cvdp-sim:v1.0.0
 WORKDIR /app
 
 # Install your agent dependencies
@@ -83,11 +83,10 @@ RUN pip install -r requirements.txt
 ENTRYPOINT ["python", "agent.py"]
 ```
 
-**Available Tools in osvb:**
+**Available Tools in `nvidia/cvdp-sim:v1.0.0`:**
 - **Icarus Verilog** - Open-source Verilog simulator
 - **Verilator** - Fast Verilog simulator and lint tool
 - **Yosys** - Open-source synthesis suite
-- **GTKWave** - Waveform viewer
 - **Standard build tools** (make, gcc, python, etc.)
 
 ### Advanced Verification Environment
@@ -109,15 +108,15 @@ python run_benchmark.py -f dv_dataset.jsonl -l -g my-agent
 
 | Image Type | Icarus | Verilator | Yosys | Xcelium | Code Coverage | Assertions |
 |------------|--------|-----------|--------|---------|---------------|------------|
-| **osvb** | ✅ | ✅ | ✅ | ❌ | Basic | Basic |
+| **nvidia/cvdp-sim:v1.0.0** | ✅ | ✅ | ✅ | ❌ | Basic | Basic |
 | **VERIF_EDA_IMAGE** | ✅ | ✅ | ✅ | ✅ | Advanced | Advanced |
 
 ### Usage Guidelines
 
 **For Basic RTL Development:**
 ```dockerfile
-# Use osvb for most verification tasks
-FROM ghcr.io/hdl/sim/osvb
+# Use the CVDP simulation image for open-source verification tasks
+FROM nvidia/cvdp-sim:v1.0.0
 # Your agent implementation
 ```
 
@@ -134,7 +133,7 @@ export VERIF_EDA_IMAGE=your-registry/cadence-tools:latest
 ```
 
 **Test Harness Considerations:**
-- **Default**: `ghcr.io/hdl/sim/osv` (note: different from osvb) is commonly used for test harness execution
+- **Default**: CVDP v1.1.0 test harnesses use `nvidia/cvdp-sim:v1.0.0` through `OSS_SIM_IMAGE`
 - **Advanced DV**: `VERIF_EDA_IMAGE` is automatically used when required by specific dataset categories
 - **Tool Consistency**: Both agent and test harness should have compatible tool environments
 

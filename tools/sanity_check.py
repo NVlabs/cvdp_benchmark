@@ -36,7 +36,8 @@ import sys
 
 
 DEFAULT_DATASET_DIR = os.path.expanduser("~/cvdp_benchmark_dataset")
-DATASET_GLOB = "cvdp_v1.0.4_*_with_solutions.jsonl"
+DATASET_VERSION = "v1.1.0"
+DATASET_GLOB = f"cvdp_{DATASET_VERSION}_*_with_solutions.jsonl"
 
 
 def discover_datasets(dataset_dir: str, filter_str: str | None = None) -> list[str]:
@@ -51,14 +52,14 @@ def discover_datasets(dataset_dir: str, filter_str: str | None = None) -> list[s
 def variant_name(dataset_file: str) -> str:
     """Extract a short variant name from a dataset filename.
 
-    cvdp_v1.0.4_nonagentic_code_generation_no_commercial_with_solutions.jsonl
+    cvdp_v1.1.0_nonagentic_code_generation_no_commercial_with_solutions.jsonl
     -> nonagentic_code_generation_no_commercial
     """
     base = os.path.basename(dataset_file)
-    # Strip known prefix and suffix
+    prefix = f"cvdp_{DATASET_VERSION}_"
     name = base
-    if name.startswith("cvdp_v1.0.4_"):
-        name = name[len("cvdp_v1.0.4_"):]
+    if name.startswith(prefix):
+        name = name[len(prefix):]
     if name.endswith("_with_solutions.jsonl"):
         name = name[: -len("_with_solutions.jsonl")]
     return name

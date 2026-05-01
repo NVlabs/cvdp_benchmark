@@ -30,6 +30,26 @@ The CVDP Benchmark is a framework for evaluating LLM and agent solutions on hard
   docker --version
   ```
 
+### Build the Open-Source Simulation Image
+
+CVDP v1.1.0 uses a dedicated open-source simulation image for non-commercial simulation tasks. Build it once after cloning the repository or pulling the v1.1.0 tooling updates:
+
+```bash
+docker build -f docker/Dockerfile.sim -t nvidia/cvdp-sim:v1.0.0 .
+```
+
+This image provides the default `OSS_SIM_IMAGE` environment used by dataset harnesses via `__OSS_SIM_IMAGE__`. CVDP v1.1.0 no longer uses the legacy third-party simulation images for this default open-source simulation flow. The build includes cocotb 2.0.1, pytest 8.3.2, Icarus Verilog v13_0, Yosys yosys-0.40, and Verilator v5.038. If you tag the image differently, set the matching value in `.env`:
+
+```bash
+OSS_SIM_IMAGE=nvidia/cvdp-sim:v1.0.0
+```
+
+Open-source place-and-route tasks still use the separate `OSS_PNR_IMAGE` setting, but in CVDP v1.1.0 its default points at the same `nvidia/cvdp-sim:v1.0.0` image:
+
+```bash
+OSS_PNR_IMAGE=nvidia/cvdp-sim:v1.0.0
+```
+
 ### Setup Instructions
 
 **1. Create a virtual environment** (recommended):
