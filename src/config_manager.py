@@ -120,7 +120,7 @@ class ConfigManager:
                            description="Path to directory containing cvdp_agentic_heavy_* local git repos (unpacked clean bundles)")
         
         # Docker and Resource Management
-        self.register_config("DOCKER_QUOTA_THRESHOLD_MB", default=50, type_cast=int,
+        self.register_config("DOCKER_QUOTA_THRESHOLD_MB", default=200, type_cast=int,
                            description="Docker quota threshold in MB")
         self.register_config("DOCKER_QUOTA_CHECK_INTERVAL", default=1, type_cast=int,
                            description="Docker quota check interval in seconds")
