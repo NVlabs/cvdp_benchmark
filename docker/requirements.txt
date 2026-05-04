@@ -51,6 +51,24 @@ cocotb==2.0.1 \
     --hash=sha256:fa8501f3299f753f7484604db07747790b66f0e4c99e51fc51885df4bf17af44 \
     --hash=sha256:faf3ec2916d2392bfa22825d46615c55fc23a3c0e93e5d8bba56aaeda1245cf7 \
     --hash=sha256:fed79b086414ac2d5faa1eff74b7533cb46404dfcd5a8e52cdffaeecdf98033a
+    # via
+    #   -r docker/requirements.in
+    #   cocotb-bus
+    #   cocotbext-axi
+    #   cocotbext-pcie
+cocotb-bus==0.3.0 \
+    --hash=sha256:9762b29273ff062f52160e57274e3cb106d14e7e776515de1372c1d73546b005 \
+    --hash=sha256:b4f06cce2462a8f9487b42c46b0ff3afd253f0fa4f67a0c382ebe0ba614229eb
+    # via
+    #   -r docker/requirements.in
+    #   cocotbext-axi
+cocotbext-axi==0.1.28 \
+    --hash=sha256:5d062185b9bb5476839a1d816821c4533b245f56f7b171b3f39130e26891ae37 \
+    --hash=sha256:aff88b528733e4e59359f06b8cc30524cc75bf31ee951ed8a573694b26816eb2
+    # via
+    #   -r docker/requirements.in
+    #   cocotbext-pcie
+cocotbext-pcie @ git+https://github.com/alexforencich/cocotbext-pcie.git@92732edd2d8cef002f0e984697ff31ccfe8a19a9
     # via -r docker/requirements.in
 coverage==7.13.4 \
     --hash=sha256:01d4cbc3c283a17fc1e42d614a119f7f438eabb593391283adca8dc86eff1246 \
@@ -180,3 +198,7 @@ pytest==8.3.2 \
     --hash=sha256:4ba08f9ae7dcf84ded419494d229b48d0903ea6407b030eaec46df5e6a73bba5 \
     --hash=sha256:c132345d12ce551242c87269de812483f5bcc87cdbb4722e48487ba194f9fdce
     # via -r docker/requirements.in
+scapy==2.7.0 \
+    --hash=sha256:bfc1ef1b93280aea1ddee53be7f74232aa28ac3d891244d41ee85200d24aa446 \
+    --hash=sha256:eb22786da92be6fd8e5c694ae5595e4f5b9ac1f4364c9c45986844f3e3063561
+    # via cocotb-bus
