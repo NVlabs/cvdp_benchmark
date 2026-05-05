@@ -79,7 +79,7 @@ runtime with `CVDP_AGENT_ENV=CDS_LIC_FILE,LM_LICENSE_FILE`.
 | `CVDP_CLAUDE_AUTH_MODE` | Environment variable | Optional. `env` (default), `oauth`, `helper`, or `host`. |
 | `CVDP_CLAUDE_SETTINGS` | Environment variable | Optional. Claude settings JSON string or path, primarily for `apiKeyHelper` auth. |
 | `CVDP_CLAUDE_MODEL` | Environment variable | Optional. Model passed to `claude --model`. |
-| `CVDP_CLAUDE_MAX_BUDGET_USD` | Environment variable | Optional. Cost cap passed to `claude --max-budget-usd`. |
+| `CVDP_CLAUDE_MAX_BUDGET_USD` | Environment variable | Optional. Cost cap passed to `claude --max-budget-usd`. Unset by default; when unset, no wrapper budget cap is passed to Claude Code. |
 | `CVDP_CLAUDE_USE_BARE` | Environment variable | Optional. Override bare mode. By default, bare mode is used only with API-key or `apiKeyHelper` auth. |
 | `CVDP_CLAUDE_ALLOWED_TOOLS` | Environment variable | Optional. Tool allow-list passed to `claude --allowedTools`. |
 | `CVDP_CLAUDE_DISALLOWED_TOOLS` | Environment variable | Optional. Tool deny-list passed to `claude --disallowedTools`. |
@@ -88,8 +88,11 @@ runtime with `CVDP_AGENT_ENV=CDS_LIC_FILE,LM_LICENSE_FILE`.
 | `CVDP_AGENT_ENV` | Environment variable | Optional. Comma-separated host environment variables to pass into the agent container. This is the generic benchmark-runner passthrough mechanism. |
 | `CVDP_AGENT_MOUNTS` | Environment variable | Optional. Semicolon-separated `source:target[:mode]` host mounts to add to the agent container. This is the generic benchmark-runner host-file passthrough mechanism. |
 | `CVDP_AGENT_WORKSPACE_ROOTS` | Environment variable | Optional. Comma-separated project roots whose changes should be accepted for directory-backed datapoints. Usually auto-discovered. |
-| `CLAUDE_CODE_MAX_TURNS` | Environment variable | Optional. Limit the number of agent turns for fair comparison. |
+| `CLAUDE_CODE_MAX_TURNS` | Environment variable | Optional. Limit the number of agent turns for fair comparison. Unset by default; when unset, no turn-budget instruction is added to the prompt. |
 | `DOCKER_TIMEOUT_AGENT` | Environment variable | Optional. Agent container timeout in seconds (set in `.env`). Defaults to 600; longer agentic runs often need a value such as 1800. |
+
+For reproducible benchmark runs, set `CVDP_CLAUDE_MAX_BUDGET_USD` and
+`CLAUDE_CODE_MAX_TURNS` explicitly and include both names in `CVDP_AGENT_ENV`.
 
 ### Auth Modes
 
