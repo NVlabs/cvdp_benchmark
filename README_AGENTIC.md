@@ -198,14 +198,16 @@ services:
     working_dir: /code
 ```
 
-Agent images can request additional runtime environment variables and host mounts with Docker labels. The runner reads these labels with `docker image inspect` and passes through only environment variables that are already set in the host environment, so secret values are not written into the generated compose file:
+Agent images can declare additional runtime environment variables and host mounts with Docker labels. Because labels are controlled by the image author, the runner ignores image-declared metadata unless `CVDP_AGENT_TRUST_IMAGE_METADATA=1` is set. Explicit user-provided `CVDP_AGENT_ENV` and `CVDP_AGENT_MOUNTS` entries are always honored.
 
 ```dockerfile
 LABEL org.cvdp.agent.env="MY_AGENT_API_KEY,MY_AGENT_MODEL"
 LABEL org.cvdp.agent.mounts="env:MY_AGENT_USE_HOST_AUTH=1:~/.my-agent/auth.json:/auth/auth.json:ro"
 ```
 
-The `org.cvdp.agent.mounts` label is semicolon-separated. Each mount is `source:target[:mode]`, optionally prefixed with `env:NAME=VALUE:` so the mount is only added when that host environment condition is true. You can add runtime-only entries without rebuilding the image with `CVDP_AGENT_ENV` and `CVDP_AGENT_MOUNTS`, using the same formats.
+The `org.cvdp.agent.mounts` label is semicolon-separated. Each mount is `source:target[:mode]`, optionally prefixed with `env:NAME=VALUE:` so the mount is only added when that host environment condition is true. The image must be built or pulled locally before label inspection can work; otherwise use `CVDP_AGENT_ENV` and `CVDP_AGENT_MOUNTS` with the same formats.
+
+For traditional directory-backed datapoints, the runner exposes and accepts changes under project workspace roots discovered from the generated harness directory. Benchmark infrastructure such as `prompt.json`, Dockerfiles, generated compose/scripts, `before/`, `src/`, and `rundir/` remains protected or ignored. Set `CVDP_AGENT_WORKSPACE_ROOTS` to a comma-separated list to override the discovered project roots for custom layouts.
 
 ### Docker Compose for Test Harness
 

@@ -5,39 +5,72 @@
 
 set -e
 
-# Default license server (override by setting env vars before running this script)
-CDS_LIC_FILE="${CDS_LIC_FILE:-5280@your-license-server}"
-LM_LICENSE_FILE="${LM_LICENSE_FILE:-5280@your-license-server}"
+BUILD_COMMERCIAL="${BUILD_COMMERCIAL:-0}"
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}"
 
-echo "Building Claude Code agent Docker images..."
+usage() {
+    echo "Usage: $0 [--commercial] [--claude-code-version VERSION]"
+    echo ""
+    echo "Builds claude-code-agent by default. Pass --commercial or set"
+    echo "BUILD_COMMERCIAL=1 to also build claude-code-agent-commercial."
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --commercial)
+            BUILD_COMMERCIAL=1
+            shift
+            ;;
+        --claude-code-version)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --claude-code-version requires a value" >&2
+                exit 1
+            fi
+            CLAUDE_CODE_VERSION="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: unknown argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+echo "Building Claude Code agent Docker image..."
 echo ""
 
 # Build non-commercial version (no EDA tools)
-echo "1. Building claude-code-agent (non-commercial)..."
-docker build -t claude-code-agent .
+echo "Building claude-code-agent (non-commercial)..."
+docker build --build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" -t claude-code-agent .
 echo "✓ claude-code-agent build complete"
 echo ""
 
 # Build commercial version (with EDA tools)
-echo "2. Building claude-code-agent-commercial (with EDA tools)..."
-echo "   Using license server: $CDS_LIC_FILE"
-docker build \
-    --build-arg CDS_LIC_FILE="$CDS_LIC_FILE" \
-    --build-arg LM_LICENSE_FILE="$LM_LICENSE_FILE" \
-    -f Dockerfile.commercial \
-    -t claude-code-agent-commercial .
-echo "✓ claude-code-agent-commercial build complete"
-echo ""
+if [ "$BUILD_COMMERCIAL" = "1" ]; then
+    echo "Building claude-code-agent-commercial (with EDA tool paths)..."
+    docker build \
+        --build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" \
+        -f Dockerfile.commercial \
+        -t claude-code-agent-commercial .
+    echo "✓ claude-code-agent-commercial build complete"
+    echo ""
+fi
 
 echo "=========================================="
-echo "Build complete! Docker images are ready:"
+echo "Build complete! Docker image is ready:"
 echo "  - claude-code-agent (non-commercial)"
-echo "  - claude-code-agent-commercial (with EDA tools)"
+if [ "$BUILD_COMMERCIAL" = "1" ]; then
+    echo "  - claude-code-agent-commercial (with EDA tool paths)"
+fi
 echo "=========================================="
 echo ""
 echo "To run the agent with the benchmark:"
 echo "  Non-commercial: ./run_benchmark.py -f <dataset.jsonl> -l -g claude-code-agent"
-echo "  Commercial:     ./run_benchmark.py -f <dataset.jsonl> -l -g claude-code-agent-commercial"
-echo ""
-echo "To use a different license server:"
-echo "  CDS_LIC_FILE='port@server' ./build_agent.sh"
+if [ "$BUILD_COMMERCIAL" = "1" ]; then
+    echo "  Commercial:     ./run_benchmark.py -f <dataset.jsonl> -l -g claude-code-agent-commercial"
+fi

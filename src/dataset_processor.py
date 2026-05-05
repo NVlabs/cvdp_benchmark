@@ -1414,11 +1414,18 @@ class AgenticProcessor (DatasetProcessor):
     AGENT_STATUS_TIMEOUT = "timeout"
     AGENT_STATUS_BUDGET_EXCEEDED = "budget_exceeded"
 
-    AGENT_WORKSPACE_DIRS = ("docs", "rtl", "verif")
-    AGENT_SNAPSHOT_DIRS = ("docs", "rtl", "verif", "rundir")
+    AGENT_DEFAULT_WORKSPACE_ROOTS = ("docs", "rtl", "verif")
+    AGENT_GENERATED_ROOTS = ("rundir",)
     AGENT_INFRASTRUCTURE_FILES = {
         "prompt.json",
+        "Dockerfile",
         "docker-compose.yml",
+        "docker-compose-agent.yml",
+        "run_docker_agent.sh",
+        "create_workspace_volume.sh",
+        "destroy_workspace_volume.sh",
+        "agent_changes.patch",
+        "golden_ref_solution.patch",
     }
     AGENT_INFRASTRUCTURE_DIRS = {
         "before",
@@ -1435,6 +1442,8 @@ class AgenticProcessor (DatasetProcessor):
     AGENT_MOUNTS_LABEL = "org.cvdp.agent.mounts"
     AGENT_ENV_OVERRIDE = "CVDP_AGENT_ENV"
     AGENT_MOUNTS_OVERRIDE = "CVDP_AGENT_MOUNTS"
+    AGENT_TRUST_IMAGE_METADATA = "CVDP_AGENT_TRUST_IMAGE_METADATA"
+    AGENT_WORKSPACE_ROOTS_OVERRIDE = "CVDP_AGENT_WORKSPACE_ROOTS"
 
     def _build_agent_prompt_payload(self, id):
         return {"prompt": self.context[id]['prompt']}
@@ -1454,7 +1463,11 @@ class AgenticProcessor (DatasetProcessor):
             text=True,
         )
         if result.returncode != 0:
-            print(f"Warning: Could not inspect labels for agent image '{agent}'")
+            print(
+                f"Warning: Could not inspect labels for agent image '{agent}'. "
+                "Image-declared agent metadata will be skipped; build/pull the image "
+                f"locally first or use {self.AGENT_ENV_OVERRIDE}/{self.AGENT_MOUNTS_OVERRIDE}."
+            )
             self._agent_label_cache[agent] = {}
             return {}
 
@@ -1471,13 +1484,36 @@ class AgenticProcessor (DatasetProcessor):
         self._agent_label_cache[agent] = labels
         return labels
 
+    def _agent_env_flag_enabled(self, key, default=False):
+        value = os.environ.get(key)
+        if value is None or value == "":
+            return default
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _get_trusted_agent_labels(self, agent):
+        if not self._agent_env_flag_enabled(self.AGENT_TRUST_IMAGE_METADATA, False):
+            has_explicit_metadata = (
+                bool(os.environ.get(self.AGENT_ENV_OVERRIDE))
+                or bool(os.environ.get(self.AGENT_MOUNTS_OVERRIDE))
+            )
+            if not has_explicit_metadata and not getattr(self, "_agent_metadata_trust_warning_printed", False):
+                print(
+                    "Agent image metadata is disabled by default. Set "
+                    f"{self.AGENT_TRUST_IMAGE_METADATA}=1 to honor {self.AGENT_ENV_LABEL} "
+                    f"and {self.AGENT_MOUNTS_LABEL}, or use {self.AGENT_ENV_OVERRIDE}/"
+                    f"{self.AGENT_MOUNTS_OVERRIDE} for explicit runtime pass-through."
+                )
+                self._agent_metadata_trust_warning_printed = True
+            return {}
+        return self._inspect_agent_labels(agent)
+
     def _split_agent_env_spec(self, value):
         if not value:
             return []
         return [item.strip() for item in re.split(r"[,;\s]+", value) if item.strip()]
 
     def _get_agent_environment(self, agent):
-        labels = self._inspect_agent_labels(agent)
+        labels = self._get_trusted_agent_labels(agent)
         env_names = []
         env_names.extend(self._split_agent_env_spec(labels.get(self.AGENT_ENV_LABEL, "")))
         env_names.extend(self._split_agent_env_spec(os.environ.get(self.AGENT_ENV_OVERRIDE, "")))
@@ -1534,7 +1570,7 @@ class AgenticProcessor (DatasetProcessor):
         return condition, source, target, mode
 
     def _get_agent_mounts(self, agent):
-        labels = self._inspect_agent_labels(agent)
+        labels = self._get_trusted_agent_labels(agent)
         mount_specs = []
         mount_specs.extend(self._split_agent_mount_spec(labels.get(self.AGENT_MOUNTS_LABEL, "")))
         mount_specs.extend(self._split_agent_mount_spec(os.environ.get(self.AGENT_MOUNTS_OVERRIDE, "")))
@@ -1589,12 +1625,12 @@ class AgenticProcessor (DatasetProcessor):
         parts = [part for part in normalized.split("/") if part]
         return any(part in self.AGENT_GENERATED_DIRS for part in parts)
 
-    def _classify_agent_change_path(self, path):
+    def _classify_agent_change_path(self, path, workspace_roots=None):
         if self._is_agent_generated_path(path):
             return "ignored", "generated_artifact"
         if self._is_agent_infrastructure_path(path):
             return "violation", "benchmark_infrastructure"
-        if not self._is_agent_workspace_path(path):
+        if not self._is_agent_workspace_path(path, workspace_roots):
             return "violation", "outside_project_workspace"
         return "accepted", None
 
@@ -1638,10 +1674,99 @@ class AgenticProcessor (DatasetProcessor):
                 })
         return violations
 
-    def _is_agent_workspace_path(self, path):
+    def _split_agent_workspace_roots_spec(self, value):
+        if not value:
+            return []
+        return [item.strip().strip("/") for item in re.split(r"[,;\s]+", value) if item.strip()]
+
+    def _is_valid_agent_workspace_root(self, root):
+        if not root or "/" in root or root in {".", ".."}:
+            return False
+        if root.startswith("."):
+            return False
+        return True
+
+    def _get_agent_workspace_roots(self, issue_path):
+        override_roots = self._split_agent_workspace_roots_spec(
+            os.environ.get(self.AGENT_WORKSPACE_ROOTS_OVERRIDE, "")
+        )
+        if override_roots:
+            valid_roots = []
+            for root in override_roots:
+                if not self._is_valid_agent_workspace_root(root):
+                    print(f"Warning: Ignoring invalid agent workspace root '{root}'")
+                    continue
+                if self._is_agent_generated_path(root) or self._is_agent_infrastructure_path(root):
+                    print(f"Warning: Ignoring protected agent workspace root '{root}'")
+                    continue
+                valid_roots.append(root)
+            if valid_roots:
+                return sorted(dict.fromkeys(valid_roots))
+
+        roots = set()
+        if os.path.isdir(issue_path):
+            for name in os.listdir(issue_path):
+                if not self._is_valid_agent_workspace_root(name):
+                    continue
+                if self._is_agent_generated_path(name) or self._is_agent_infrastructure_path(name):
+                    continue
+                roots.add(name)
+
+        if not roots:
+            roots.update(self.AGENT_DEFAULT_WORKSPACE_ROOTS)
+
+        return sorted(roots)
+
+    def _agent_bind_volumes_for_roots(self, roots):
+        volumes = []
+        for root in roots:
+            volumes.append(f'./{root}:/code/{root}')
+        for root in self.AGENT_GENERATED_ROOTS:
+            volumes.append(f'./{root}:/code/{root}')
+        volumes.append('./prompt.json:/code/prompt.json')
+        return volumes
+
+    def _snapshot_agent_paths(self, issue_path, roots):
+        before_dir = os.path.join(issue_path, "before")
+        os.makedirs(before_dir, exist_ok=True)
+
+        for root in roots:
+            src = os.path.join(issue_path, root)
+            bak = os.path.join(before_dir, root)
+
+            if os.path.isdir(bak):
+                shutil.rmtree(bak)
+            elif os.path.exists(bak):
+                os.remove(bak)
+
+            if os.path.isdir(src):
+                shutil.copytree(src, bak)
+            elif os.path.isfile(src):
+                os.makedirs(os.path.dirname(bak), exist_ok=True)
+                shutil.copy2(src, bak)
+            else:
+                os.makedirs(src, exist_ok=True)
+
+        return before_dir
+
+    def _get_files_for_agent_root(self, path):
+        if os.path.isdir(path):
+            return {f: os.path.join(path, f) for f in self._get_files(path)}
+        if os.path.isfile(path):
+            return {"": path}
+        return {}
+
+    def _agent_context_path(self, root, rel_path):
+        if rel_path:
+            return os.path.join(root, rel_path)
+        return root
+
+    def _is_agent_workspace_path(self, path, workspace_roots=None):
         normalized = self._normalize_agent_path(path)
         root = normalized.split("/", 1)[0]
-        return root in self.AGENT_WORKSPACE_DIRS
+        if workspace_roots is None:
+            workspace_roots = self.AGENT_DEFAULT_WORKSPACE_ROOTS
+        return root in workspace_roots
 
     def _agent_metadata(self, status, returncode=None, logfile=None, execution=0.0, error_msg=None):
         metadata = {
@@ -1735,7 +1860,10 @@ class AgenticProcessor (DatasetProcessor):
                 self.runs[id][key] = result[key]
 
     def _copy_agent_metadata_to_result(self, id, result):
-        if id not in self.runs:
+        metadata_source = self.runs.get(id)
+        if metadata_source is None and id in self.agent_results:
+            metadata_source = self.agent_results[id]
+        if metadata_source is None:
             return result
 
         for key in [
@@ -1748,8 +1876,8 @@ class AgenticProcessor (DatasetProcessor):
             "agent_ignored_changes",
             "agent_patch_file",
         ]:
-            if key in self.runs[id]:
-                result[key] = self.runs[id][key]
+            if key in metadata_source:
+                result[key] = metadata_source[key]
 
         return result
 
@@ -1951,17 +2079,13 @@ class AgenticProcessor (DatasetProcessor):
             }
         else:
             # Use traditional directory-based mounting
+            workspace_roots = self._get_agent_workspace_roots(issue_path)
+            print(f"[INFO] Agent project workspace roots: {', '.join(workspace_roots)}")
             docker_compose = {
                 'services': {
                     'agent': {
                         'image': agent,
-                        'volumes': [
-                            './docs:/code/docs',
-                            './rtl:/code/rtl',
-                            './verif:/code/verif',
-                            './rundir:/code/rundir',
-                            './prompt.json:/code/prompt.json'
-                        ],
+                        'volumes': self._agent_bind_volumes_for_roots(workspace_roots),
                         'working_dir': '/code',
                         'environment': agent_environment
                     }
@@ -2394,19 +2518,15 @@ class AgenticProcessor (DatasetProcessor):
                         logging.error(result['agent_error'])
                 
             else:
-                # Traditional agent processing for non-context-heavy datapoints
-                # Prepare directories for agent
-                dir_names = list(self.AGENT_SNAPSHOT_DIRS)
+                # Traditional agent processing for non-context-heavy datapoints.
+                # Track project roots dynamically so agentic datasets are not
+                # constrained to only docs/, rtl/, and verif/.
+                project_roots = self._get_agent_workspace_roots(issue_path)
+                tracked_roots = project_roots + list(self.AGENT_GENERATED_ROOTS)
                 if hasattr(self, 'include_harness') and self.include_harness:
-                    dir_names.append("src")
-                before_dir = os.path.join(issue_path, "before")
-                os.makedirs(before_dir, exist_ok=True)
-                for d in dir_names:
-                    src = os.path.join(issue_path, d)
-                    bak = os.path.join(before_dir, d)
-                    os.makedirs(src, exist_ok=True)
-                    if os.path.exists(bak): shutil.rmtree(bak)
-                    shutil.copytree(src, bak)
+                    tracked_roots.append("src")
+                tracked_roots = sorted(dict.fromkeys(tracked_roots))
+                before_dir = self._snapshot_agent_paths(issue_path, tracked_roots)
                 protected_file_snapshots = self._snapshot_agent_infrastructure_files(issue_path)
                 
                 if not self.golden:
@@ -2443,15 +2563,15 @@ class AgenticProcessor (DatasetProcessor):
                     agent_contract_violations = []
                     agent_ignored_changes = []
                 
-                    for d in dir_names:
+                    for d in tracked_roots:
                         orig_dir = os.path.join(before_dir, d)
                         mod_dir = os.path.join(issue_path, d)
-                        orig_files = {f: os.path.join(orig_dir, f) for f in self._get_files(orig_dir)}
-                        mod_files = {f: os.path.join(mod_dir, f) for f in self._get_files(mod_dir)}
+                        orig_files = self._get_files_for_agent_root(orig_dir)
+                        mod_files = self._get_files_for_agent_root(mod_dir)
                     
                         # Handle added and modified files
                         for rel_path, mod_path in mod_files.items():
-                            context_path = os.path.join(d, rel_path)
+                            context_path = self._agent_context_path(d, rel_path)
                             try:
                                 with open(mod_path, 'r', encoding='utf-8', errors='replace') as f:
                                     mod_content = f.read()
@@ -2465,7 +2585,7 @@ class AgenticProcessor (DatasetProcessor):
                                         continue
                                     change_action = "modified"
 
-                                change_policy, change_reason = self._classify_agent_change_path(context_path)
+                                change_policy, change_reason = self._classify_agent_change_path(context_path, project_roots)
                                 if change_policy != "accepted":
                                     change_record = {
                                         "path": self._normalize_agent_path(context_path),
@@ -2505,8 +2625,8 @@ class AgenticProcessor (DatasetProcessor):
                         # Handle deleted files
                         for rel_path, orig_path in orig_files.items():
                             if rel_path not in mod_files:
-                                context_path = os.path.join(d, rel_path)
-                                change_policy, change_reason = self._classify_agent_change_path(context_path)
+                                context_path = self._agent_context_path(d, rel_path)
+                                change_policy, change_reason = self._classify_agent_change_path(context_path, project_roots)
                                 if change_policy != "accepted":
                                     change_record = {
                                         "path": self._normalize_agent_path(context_path),

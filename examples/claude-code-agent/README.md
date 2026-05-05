@@ -13,7 +13,7 @@ A Docker-based agent that uses [Claude Code CLI](https://docs.anthropic.com/en/d
 ```bash
 cd examples/claude-code-agent/
 
-# Build both images (non-commercial + commercial)
+# Build the non-commercial image
 ./build_agent.sh
 
 # Or build only the non-commercial image
@@ -21,15 +21,12 @@ docker build -t claude-code-agent .
 
 # Optionally pin the Claude Code CLI version
 docker build --build-arg CLAUDE_CODE_VERSION=2.1.126 -t claude-code-agent .
+
+# Build the commercial image when needed
+./build_agent.sh --commercial
 ```
 
-To override the default license server for the commercial build:
-
-```bash
-CDS_LIC_FILE='port@server' LM_LICENSE_FILE='port@server' ./build_agent.sh
-```
-
-This produces two Docker images:
+These commands can produce two Docker images:
 
 | Image | Base | Use case |
 |-------|------|----------|
@@ -38,15 +35,17 @@ This produces two Docker images:
 
 ## Running
 
-Set one Claude auth path and run the benchmark from the repo root:
+Set one Claude auth path and run the benchmark from the repo root. The most explicit setup is to name the environment variables that should pass into the agent container:
 
 ```bash
 # Direct Anthropic API key
 export ANTHROPIC_API_KEY=sk-ant-...
+export CVDP_AGENT_ENV=ANTHROPIC_API_KEY
 
 # Or, for Claude subscription/SSO auth, generate a long-lived token once:
 claude setup-token
 export CLAUDE_CODE_OAUTH_TOKEN=...
+export CVDP_AGENT_ENV=CLAUDE_CODE_OAUTH_TOKEN
 
 # Single run
 python run_benchmark.py -f dataset.jsonl -l -g claude-code-agent
@@ -58,6 +57,7 @@ python run_benchmark.py -f dataset.jsonl -i cvdp_agentic_issue_0001 -l -g claude
 python run_samples.py -f dataset.jsonl -l -g claude-code-agent -n 5 -k 1
 
 # Commercial image (with EDA tools)
+export CVDP_AGENT_ENV=ANTHROPIC_API_KEY,CDS_LIC_FILE,LM_LICENSE_FILE
 python run_benchmark.py -f dataset.jsonl -l -g claude-code-agent-commercial
 ```
 
@@ -77,30 +77,36 @@ python run_benchmark.py -f dataset.jsonl -l -g claude-code-agent-commercial
 | `CVDP_CLAUDE_DISALLOWED_TOOLS` | Environment variable | Optional. Tool deny-list passed to `claude --disallowedTools`. |
 | `CVDP_CLAUDE_ENABLE_TELEMETRY` | Environment variable | Optional. Set to `1` to opt in to Claude Code telemetry. Telemetry is off by default for benchmark logs. |
 | `CVDP_CLAUDE_INCLUDE_WORKSPACE_RULES` | Environment variable | Optional. Set to `0` to disable the Claude wrapper's benchmark workspace rules. |
+| `CVDP_AGENT_ENV` | Environment variable | Optional. Comma-separated host environment variables to pass into the agent container. |
+| `CVDP_AGENT_MOUNTS` | Environment variable | Optional. Semicolon-separated host mounts to add to the agent container. |
+| `CVDP_AGENT_TRUST_IMAGE_METADATA` | Environment variable | Optional. Set to `1` to honor `org.cvdp.agent.env` and `org.cvdp.agent.mounts` labels from a locally available agent image. |
+| `CVDP_AGENT_WORKSPACE_ROOTS` | Environment variable | Optional. Comma-separated project roots whose changes should be accepted for directory-backed datapoints. Usually auto-discovered. |
 | `CLAUDE_CODE_VERSION` | Docker build argument | Optional. Pin the Claude Code npm package version for reproducibility. |
 | `CLAUDE_CODE_MAX_TURNS` | Environment variable | Optional. Limit the number of agent turns for fair comparison. |
 | `DOCKER_TIMEOUT_AGENT` | Environment variable | Optional. Agent container timeout in seconds (set in `.env`). Defaults to 600; longer agentic runs often need a value such as 1800. |
 
 ### Auth Modes
 
-`CVDP_CLAUDE_AUTH_MODE=env` is the default. It accepts `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or configured cloud-provider auth environment variables. The Claude image declares its supported pass-through environment variables with the `org.cvdp.agent.env` Docker label, so auth values are not written into generated compose files.
+`CVDP_CLAUDE_AUTH_MODE=env` is the default. It accepts `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, or configured cloud-provider auth environment variables. Pass required variables explicitly with `CVDP_AGENT_ENV`. As a convenience for trusted local images, the Claude image also declares common pass-through variables with the `org.cvdp.agent.env` Docker label, but the benchmark only honors those labels when `CVDP_AGENT_TRUST_IMAGE_METADATA=1`.
 
 Use `CVDP_CLAUDE_AUTH_MODE=oauth` to require `CLAUDE_CODE_OAUTH_TOKEN` specifically. This is the preferred path when you want to use an existing Claude subscription or SSO-backed organization without copying host login state into the container.
 
 Use `CVDP_CLAUDE_AUTH_MODE=helper` with `CVDP_CLAUDE_SETTINGS` when Claude Code should call an `apiKeyHelper` script. The helper script must be available inside the container.
 
-Use `CVDP_CLAUDE_AUTH_MODE=host` only as an explicit best-effort fallback. The Claude image declares conditional host-auth mounts with the `org.cvdp.agent.mounts` Docker label, so the benchmark mounts `~/.claude/.credentials.json`, `~/.claude/settings.json`, and `~/.claude.json` read-only only when host auth is requested and those files exist. The wrapper copies them into a temporary writable container home. This is most likely to work for Linux file-backed Claude Code credentials. It is not a portable replacement for macOS Keychain or other host credential stores, and it should not be the default benchmark path.
+Use `CVDP_CLAUDE_AUTH_MODE=host` only as an explicit best-effort fallback. The Claude image declares conditional host-auth mounts with the `org.cvdp.agent.mounts` Docker label, but those mounts are honored only when `CVDP_AGENT_TRUST_IMAGE_METADATA=1` is set. Alternatively, provide the same mounts explicitly with `CVDP_AGENT_ENV=CVDP_CLAUDE_AUTH_MODE` and `CVDP_AGENT_MOUNTS`. The wrapper copies mounted files into a temporary writable container home. This is most likely to work for Linux file-backed Claude Code credentials. It is not a portable replacement for macOS Keychain or other host credential stores, and it should not be the default benchmark path.
+
+Cloud-provider auth, such as Bedrock or Vertex, should be passed explicitly with `CVDP_AGENT_ENV` because those environments can include broad cloud credentials. For example, a Bedrock run might set `CVDP_AGENT_ENV=CLAUDE_CODE_USE_BEDROCK,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN`.
 
 ### Agent Image Metadata
 
-The benchmark runner is agent-neutral. Agent images can declare runtime needs with Docker labels:
+The benchmark runner is agent-neutral. Trusted local agent images can declare runtime needs with Docker labels:
 
 ```dockerfile
 LABEL org.cvdp.agent.env="ANTHROPIC_API_KEY,CLAUDE_CODE_OAUTH_TOKEN,CVDP_CLAUDE_AUTH_MODE"
 LABEL org.cvdp.agent.mounts="env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude.json:/host-claude/.claude.json:ro"
 ```
 
-Use `CVDP_AGENT_ENV` or `CVDP_AGENT_MOUNTS` to add pass-through environment variables or host mounts without rebuilding an image. `CVDP_AGENT_MOUNTS` uses the same semicolon-separated format as the label.
+Use `CVDP_AGENT_ENV` or `CVDP_AGENT_MOUNTS` to add pass-through environment variables or host mounts without rebuilding an image. `CVDP_AGENT_MOUNTS` uses the same semicolon-separated format as the label. Image labels are inspected with `docker image inspect`, so they only work after the image has been built or pulled locally.
 
 ## How It Works
 

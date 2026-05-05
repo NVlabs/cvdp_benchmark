@@ -172,6 +172,8 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
                 }
             else:
                 result = self.repo.run(issue, obj, repo, self.model)
+                if hasattr(self.repo, '_copy_agent_metadata_to_result'):
+                    self.repo._copy_agent_metadata_to_result(issue, result)
             
             # Only store result in file if the model requires evaluation
             # (e.g., skip for local_export mode which only generates prompts)
@@ -279,6 +281,8 @@ class AgenticBenchmark(wrapper.AgenticWrapper):
                 }
             else:
                 result = self.repo.run(issue, obj, repo, self.model)
+                if hasattr(self.repo, '_copy_agent_metadata_to_result'):
+                    self.repo._copy_agent_metadata_to_result(issue, result)
             
             # Only store result in file if the model requires evaluation
             # (e.g., skip for local_export mode which only generates prompts)
