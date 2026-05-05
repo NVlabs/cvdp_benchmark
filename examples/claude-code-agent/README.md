@@ -19,9 +19,6 @@ cd examples/claude-code-agent/
 # Or build only the non-commercial image
 docker build -t claude-code-agent .
 
-# Optionally pin the Claude Code CLI version
-docker build --build-arg CLAUDE_CODE_VERSION=2.1.126 -t claude-code-agent .
-
 # Build the commercial image when needed
 ./build_agent.sh --commercial
 ```
@@ -61,6 +58,12 @@ export CVDP_AGENT_ENV=ANTHROPIC_API_KEY,CDS_LIC_FILE,LM_LICENSE_FILE
 python run_benchmark.py -f dataset.jsonl -l -g claude-code-agent-commercial
 ```
 
+For the commercial image, license configuration follows the Cadence Dockerfile
+convention: replace `CDS_LIC_FILE=REPLACE_WITH_YOUR_LICENSE_SERVERS` in
+`Dockerfile.commercial`, with `LM_LICENSE_FILE` derived from it. If you prefer
+not to bake license server names into a local image, override both variables at
+runtime with `CVDP_AGENT_ENV=CDS_LIC_FILE,LM_LICENSE_FILE`.
+
 ## Configuration
 
 | Setting | Type | Description |
@@ -81,7 +84,6 @@ python run_benchmark.py -f dataset.jsonl -l -g claude-code-agent-commercial
 | `CVDP_AGENT_MOUNTS` | Environment variable | Optional. Semicolon-separated host mounts to add to the agent container. |
 | `CVDP_AGENT_TRUST_IMAGE_METADATA` | Environment variable | Optional. Set to `1` to honor `org.cvdp.agent.env` and `org.cvdp.agent.mounts` labels from a locally available agent image. |
 | `CVDP_AGENT_WORKSPACE_ROOTS` | Environment variable | Optional. Comma-separated project roots whose changes should be accepted for directory-backed datapoints. Usually auto-discovered. |
-| `CLAUDE_CODE_VERSION` | Docker build argument | Optional. Pin the Claude Code npm package version for reproducibility. |
 | `CLAUDE_CODE_MAX_TURNS` | Environment variable | Optional. Limit the number of agent turns for fair comparison. |
 | `DOCKER_TIMEOUT_AGENT` | Environment variable | Optional. Agent container timeout in seconds (set in `.env`). Defaults to 600; longer agentic runs often need a value such as 1800. |
 

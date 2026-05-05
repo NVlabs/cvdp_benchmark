@@ -1,7 +1,5 @@
 FROM rockylinux/rockylinux:9
 
-ARG CLAUDE_CODE_VERSION=latest
-
 LABEL org.cvdp.agent.env="CLAUDE_CODE_MAX_TURNS,ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_BASE_URL,ANTHROPIC_CUSTOM_HEADERS,CVDP_CLAUDE_AUTH_MODE,CVDP_CLAUDE_SETTINGS,CVDP_CLAUDE_MODEL,CVDP_CLAUDE_MAX_BUDGET_USD,CVDP_CLAUDE_USE_BARE,CVDP_CLAUDE_ALLOWED_TOOLS,CVDP_CLAUDE_DISALLOWED_TOOLS,CVDP_CLAUDE_ENABLE_TELEMETRY,CVDP_CLAUDE_INCLUDE_WORKSPACE_RULES,CLAUDE_CODE_API_KEY_HELPER_TTL_MS,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,CLAUDE_CODE_SKIP_PROMPT_HISTORY,DISABLE_AUTOUPDATER"
 LABEL org.cvdp.agent.mounts="env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude/.credentials.json:/host-claude/.credentials.json:ro;env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude/settings.json:/host-claude/settings.json:ro;env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude.json:/host-claude/.claude.json:ro"
 
@@ -37,16 +35,24 @@ ENV PATH="$PATH:/opt/cadence/installs/VMANAGER2403/bin"
 # Set MDV_XLM_HOME for Xcelium coverage analysis
 ENV MDV_XLM_HOME="/opt/cadence/installs/XCELIUM2403"
 
+# Configuration of the license
+# IMPORTANT: Replace with your organization's license server(s), or override at
+# runtime by passing CDS_LIC_FILE and LM_LICENSE_FILE through CVDP_AGENT_ENV.
+# Format: port@server1:port@server2:port@server3
+# Example: ENV CDS_LIC_FILE=5280@license-server-1:5280@license-server-2
+ENV CDS_LIC_FILE=REPLACE_WITH_YOUR_LICENSE_SERVERS
+ENV LM_LICENSE_FILE="$CDS_LIC_FILE"
+
 # ----------------------------------------
 # - Preparing Python Environment
 # ----------------------------------------
 
 RUN dnf -y install python3.12
 ADD https://bootstrap.pypa.io/get-pip.py get-pip.py
-RUN python3 ./get-pip.py
+RUN python3.12 ./get-pip.py
 # Install cocotb 1.9.x which includes runner module, or install separately
-RUN python3 -m pip install pytest pytest-timeout "cocotb<2.0" || \
-    python3 -m pip install pytest pytest-timeout cocotb cocotb-runner
+RUN python3.12 -m pip install pytest pytest-timeout "cocotb<2.0" || \
+    python3.12 -m pip install pytest pytest-timeout cocotb cocotb-runner
 
 # ----------------------------------------
 # - Install Claude Code CLI
@@ -60,12 +66,8 @@ RUN curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - && \
 # Verify Node.js version
 RUN node --version && npm --version
 
-# Install Claude Code CLI via npm. Set CLAUDE_CODE_VERSION to pin benchmark runs.
-RUN if [ "$CLAUDE_CODE_VERSION" = "latest" ]; then \
-        npm install -g @anthropic-ai/claude-code; \
-    else \
-        npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
-    fi
+# Install Claude Code CLI via npm.
+RUN npm install -g @anthropic-ai/claude-code
 
 # Verify Claude installation
 RUN which claude && claude --version
@@ -95,4 +97,4 @@ ENV CLAUDE_CODE_COMMERCIAL=1
 USER claude
 
 # Set the entrypoint
-ENTRYPOINT ["python3", "/app/agent.py"]
+ENTRYPOINT ["python3.12", "/app/agent.py"]

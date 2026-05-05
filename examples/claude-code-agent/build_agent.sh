@@ -6,10 +6,9 @@
 set -e
 
 BUILD_COMMERCIAL="${BUILD_COMMERCIAL:-0}"
-CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}"
 
 usage() {
-    echo "Usage: $0 [--commercial] [--claude-code-version VERSION]"
+    echo "Usage: $0 [--commercial]"
     echo ""
     echo "Builds claude-code-agent by default. Pass --commercial or set"
     echo "BUILD_COMMERCIAL=1 to also build claude-code-agent-commercial."
@@ -20,14 +19,6 @@ while [ $# -gt 0 ]; do
         --commercial)
             BUILD_COMMERCIAL=1
             shift
-            ;;
-        --claude-code-version)
-            if [ $# -lt 2 ]; then
-                echo "ERROR: --claude-code-version requires a value" >&2
-                exit 1
-            fi
-            CLAUDE_CODE_VERSION="$2"
-            shift 2
             ;;
         -h|--help)
             usage
@@ -46,7 +37,7 @@ echo ""
 
 # Build non-commercial version (no EDA tools)
 echo "Building claude-code-agent (non-commercial)..."
-docker build --build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" -t claude-code-agent .
+docker build -t claude-code-agent .
 echo "✓ claude-code-agent build complete"
 echo ""
 
@@ -54,7 +45,6 @@ echo ""
 if [ "$BUILD_COMMERCIAL" = "1" ]; then
     echo "Building claude-code-agent-commercial (with EDA tool paths)..."
     docker build \
-        --build-arg CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" \
         -f Dockerfile.commercial \
         -t claude-code-agent-commercial .
     echo "✓ claude-code-agent-commercial build complete"
