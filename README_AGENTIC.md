@@ -198,14 +198,15 @@ services:
     working_dir: /code
 ```
 
-Agent images can declare additional runtime environment variables and host mounts with Docker labels. Because labels are controlled by the image author, the runner ignores image-declared metadata unless `CVDP_AGENT_TRUST_IMAGE_METADATA=1` is set. Explicit user-provided `CVDP_AGENT_ENV` and `CVDP_AGENT_MOUNTS` entries are always honored.
+The runner is agent-neutral and only passes host auth or host files when the user requests it for that run. Use `CVDP_AGENT_ENV` to name host environment variables that should be forwarded into the agent container, and use `CVDP_AGENT_MOUNTS` for semicolon-separated `source:target[:mode]` host mounts:
 
-```dockerfile
-LABEL org.cvdp.agent.env="MY_AGENT_API_KEY,MY_AGENT_MODEL"
-LABEL org.cvdp.agent.mounts="env:MY_AGENT_USE_HOST_AUTH=1:~/.my-agent/auth.json:/auth/auth.json:ro"
+```bash
+export CVDP_AGENT_ENV=MY_AGENT_API_KEY,MY_AGENT_MODEL
+export CVDP_AGENT_MOUNTS="$HOME/.my-agent/auth.json:/auth/auth.json:ro"
+python run_benchmark.py -f dataset.jsonl -l -g my-agent-image
 ```
 
-The `org.cvdp.agent.mounts` label is semicolon-separated. Each mount is `source:target[:mode]`, optionally prefixed with `env:NAME=VALUE:` so the mount is only added when that host environment condition is true. The image must be built or pulled locally before label inspection can work; otherwise use `CVDP_AGENT_ENV` and `CVDP_AGENT_MOUNTS` with the same formats.
+Agent-specific auth recipes should live with the agent example. For example, a Claude agent can document how to pass `ANTHROPIC_API_KEY`, while another agent can document its own token or host-login file layout without adding policy to the benchmark runner.
 
 For traditional directory-backed datapoints, the runner exposes and accepts changes under project workspace roots discovered from the generated harness directory. Benchmark infrastructure such as `prompt.json`, Dockerfiles, generated compose/scripts, `before/`, `src/`, and `rundir/` remains protected or ignored. Set `CVDP_AGENT_WORKSPACE_ROOTS` to a comma-separated list to override the discovered project roots for custom layouts.
 

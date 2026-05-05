@@ -1438,85 +1438,20 @@ class AgenticProcessor (DatasetProcessor):
         ".pytest_cache",
     }
 
-    AGENT_ENV_LABEL = "org.cvdp.agent.env"
-    AGENT_MOUNTS_LABEL = "org.cvdp.agent.mounts"
     AGENT_ENV_OVERRIDE = "CVDP_AGENT_ENV"
     AGENT_MOUNTS_OVERRIDE = "CVDP_AGENT_MOUNTS"
-    AGENT_TRUST_IMAGE_METADATA = "CVDP_AGENT_TRUST_IMAGE_METADATA"
     AGENT_WORKSPACE_ROOTS_OVERRIDE = "CVDP_AGENT_WORKSPACE_ROOTS"
 
     def _build_agent_prompt_payload(self, id):
         return {"prompt": self.context[id]['prompt']}
-
-    def _inspect_agent_labels(self, agent):
-        if not agent:
-            return {}
-
-        if not hasattr(self, "_agent_label_cache"):
-            self._agent_label_cache = {}
-        if agent in self._agent_label_cache:
-            return self._agent_label_cache[agent]
-
-        result = subprocess.run(
-            ["docker", "image", "inspect", agent, "--format", "{{ json .Config.Labels }}"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(
-                f"Warning: Could not inspect labels for agent image '{agent}'. "
-                "Image-declared agent metadata will be skipped; build/pull the image "
-                f"locally first or use {self.AGENT_ENV_OVERRIDE}/{self.AGENT_MOUNTS_OVERRIDE}."
-            )
-            self._agent_label_cache[agent] = {}
-            return {}
-
-        label_text = result.stdout.strip()
-        if not label_text or label_text == "null":
-            labels = {}
-        else:
-            try:
-                labels = json.loads(label_text)
-            except json.JSONDecodeError:
-                print(f"Warning: Could not parse labels for agent image '{agent}'")
-                labels = {}
-
-        self._agent_label_cache[agent] = labels
-        return labels
-
-    def _agent_env_flag_enabled(self, key, default=False):
-        value = os.environ.get(key)
-        if value is None or value == "":
-            return default
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-
-    def _get_trusted_agent_labels(self, agent):
-        if not self._agent_env_flag_enabled(self.AGENT_TRUST_IMAGE_METADATA, False):
-            has_explicit_metadata = (
-                bool(os.environ.get(self.AGENT_ENV_OVERRIDE))
-                or bool(os.environ.get(self.AGENT_MOUNTS_OVERRIDE))
-            )
-            if not has_explicit_metadata and not getattr(self, "_agent_metadata_trust_warning_printed", False):
-                print(
-                    "Agent image metadata is disabled by default. Set "
-                    f"{self.AGENT_TRUST_IMAGE_METADATA}=1 to honor {self.AGENT_ENV_LABEL} "
-                    f"and {self.AGENT_MOUNTS_LABEL}, or use {self.AGENT_ENV_OVERRIDE}/"
-                    f"{self.AGENT_MOUNTS_OVERRIDE} for explicit runtime pass-through."
-                )
-                self._agent_metadata_trust_warning_printed = True
-            return {}
-        return self._inspect_agent_labels(agent)
 
     def _split_agent_env_spec(self, value):
         if not value:
             return []
         return [item.strip() for item in re.split(r"[,;\s]+", value) if item.strip()]
 
-    def _get_agent_environment(self, agent):
-        labels = self._get_trusted_agent_labels(agent)
-        env_names = []
-        env_names.extend(self._split_agent_env_spec(labels.get(self.AGENT_ENV_LABEL, "")))
-        env_names.extend(self._split_agent_env_spec(os.environ.get(self.AGENT_ENV_OVERRIDE, "")))
+    def _get_agent_environment(self, _agent):
+        env_names = self._split_agent_env_spec(os.environ.get(self.AGENT_ENV_OVERRIDE, ""))
 
         environment = []
         seen = set()
@@ -1531,7 +1466,7 @@ class AgenticProcessor (DatasetProcessor):
                 seen.add(key)
 
         if environment:
-            print(f"Passing {len(environment)} agent environment variables from image metadata/config")
+            print(f"Passing {len(environment)} explicit agent environment variables")
         return environment
 
     def _split_agent_mount_spec(self, value):
@@ -1539,41 +1474,18 @@ class AgenticProcessor (DatasetProcessor):
             return []
         return [item.strip() for item in value.split(";") if item.strip()]
 
-    def _agent_mount_condition_matches(self, condition):
-        if not condition:
-            return True
-
-        if "=" in condition:
-            key, expected_value = condition.split("=", 1)
-            return os.environ.get(key) == expected_value
-
-        return os.environ.get(condition) is not None and os.environ.get(condition) != ""
-
     def _parse_agent_mount_spec(self, spec):
-        condition = None
-        mount_spec = spec
-
-        if spec.startswith("env:"):
-            remaining = spec[len("env:"):]
-            if ":" not in remaining:
-                print(f"Warning: Ignoring invalid conditional agent mount '{spec}'")
-                return None
-            condition, mount_spec = remaining.split(":", 1)
-
-        parts = mount_spec.split(":")
+        parts = spec.split(":")
         if len(parts) < 2 or len(parts) > 3:
             print(f"Warning: Ignoring invalid agent mount '{spec}'")
             return None
 
         source, target = parts[0], parts[1]
         mode = parts[2] if len(parts) == 3 else None
-        return condition, source, target, mode
+        return source, target, mode
 
-    def _get_agent_mounts(self, agent):
-        labels = self._get_trusted_agent_labels(agent)
-        mount_specs = []
-        mount_specs.extend(self._split_agent_mount_spec(labels.get(self.AGENT_MOUNTS_LABEL, "")))
-        mount_specs.extend(self._split_agent_mount_spec(os.environ.get(self.AGENT_MOUNTS_OVERRIDE, "")))
+    def _get_agent_mounts(self, _agent):
+        mount_specs = self._split_agent_mount_spec(os.environ.get(self.AGENT_MOUNTS_OVERRIDE, ""))
 
         mounts = []
         seen = set()
@@ -1582,10 +1494,7 @@ class AgenticProcessor (DatasetProcessor):
             if parsed is None:
                 continue
 
-            condition, source, target, mode = parsed
-            if not self._agent_mount_condition_matches(condition):
-                continue
-
+            source, target, mode = parsed
             expanded_source = os.path.expandvars(os.path.expanduser(source))
             if not os.path.exists(expanded_source):
                 print(f"Warning: Agent requested host mount '{source}', but it does not exist")
@@ -1600,7 +1509,7 @@ class AgenticProcessor (DatasetProcessor):
                 seen.add(mount)
 
         if mounts:
-            print(f"Adding {len(mounts)} agent-declared host mounts")
+            print(f"Adding {len(mounts)} explicit agent host mounts")
         return mounts
 
     def _normalize_agent_path(self, path):
