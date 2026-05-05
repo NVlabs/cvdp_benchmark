@@ -1,30 +1,35 @@
-FROM ubuntu:22.04
+FROM nvidia/cvdp-sim:v1.0.0
 
-# Prevent interactive prompts during package installation
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
+ARG CLAUDE_CODE_VERSION=latest
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    python3 \
-    python3-pip \
-    git \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+LABEL org.cvdp.agent.env="OPENAI_USER_KEY,CLAUDE_CODE_MAX_TURNS,ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_BASE_URL,ANTHROPIC_CUSTOM_HEADERS,CLAUDE_CODE_USE_BEDROCK,CLAUDE_CODE_USE_VERTEX,CLAUDE_CODE_USE_FOUNDRY,ANTHROPIC_BEDROCK_BASE_URL,ANTHROPIC_VERTEX_PROJECT_ID,ANTHROPIC_VERTEX_REGION,ANTHROPIC_FOUNDRY_API_KEY,ANTHROPIC_FOUNDRY_BASE_URL,AWS_PROFILE,AWS_REGION,AWS_DEFAULT_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN,GOOGLE_APPLICATION_CREDENTIALS,GOOGLE_CLOUD_PROJECT,GOOGLE_CLOUD_QUOTA_PROJECT,AZURE_CLIENT_ID,AZURE_TENANT_ID,AZURE_CLIENT_SECRET,AZURE_FEDERATED_TOKEN_FILE,AZURE_AUTHORITY_HOST,CVDP_CLAUDE_AUTH_MODE,CVDP_CLAUDE_SETTINGS,CVDP_CLAUDE_MODEL,CVDP_CLAUDE_MAX_BUDGET_USD,CVDP_CLAUDE_USE_BARE,CVDP_CLAUDE_ALLOWED_TOOLS,CVDP_CLAUDE_DISALLOWED_TOOLS,CVDP_CLAUDE_ENABLE_TELEMETRY,CVDP_CLAUDE_INCLUDE_WORKSPACE_RULES,CLAUDE_CODE_API_KEY_HELPER_TTL_MS,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC,CLAUDE_CODE_SKIP_PROMPT_HISTORY,DISABLE_AUTOUPDATER"
+LABEL org.cvdp.agent.mounts="env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude/.credentials.json:/host-claude/.credentials.json:ro;env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude/settings.json:/host-claude/settings.json:ro;env:CVDP_CLAUDE_AUTH_MODE=host:~/.claude.json:/host-claude/.claude.json:ro"
 
-# Install Node.js 20.x (required for Claude Code which needs >= 18)
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
+# Install Node.js from the Ubuntu 24.04 base image repositories. Claude Code
+# requires Node >= 18, which the CVDP simulation image's base distribution provides.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nodejs \
+    npm && \
     rm -rf /var/lib/apt/lists/*
 
 # Verify Node.js version
 RUN node --version && npm --version
 
-# Install Claude Code CLI via npm
-RUN npm install -g @anthropic-ai/claude-code
+# Install Claude Code CLI via npm. Set CLAUDE_CODE_VERSION to pin benchmark runs.
+RUN if [ "$CLAUDE_CODE_VERSION" = "latest" ]; then \
+        npm install -g @anthropic-ai/claude-code; \
+    else \
+        npm install -g "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"; \
+    fi
 
-# Verify Claude installation
-RUN which claude && claude --version
+# Verify Claude and the inherited OSS verification toolchain.
+RUN command -v iverilog && \
+    command -v verilator && \
+    command -v yosys && \
+    python3 -m pytest --version && \
+    which claude && \
+    claude --version
 
 # Create a non-root user for Claude (required for --dangerously-skip-permissions)
 RUN useradd -m -u 1001 -s /bin/bash claude && \

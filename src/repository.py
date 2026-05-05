@@ -687,13 +687,14 @@ class Repository:
         print(f"[INFO]   Create: {create_script_path}")
         print(f"[INFO]   Destroy: {destroy_script_path}")
 
-    def create_agent_script(self, docker_compose_path, agent_image=None):
+    def create_agent_script(self, docker_compose_path, agent_image=None, project_name=None):
         """
         Creates a run_docker_agent.sh script to run the agent in a Docker container.
         
         Args:
             docker_compose_path (str): Path to the docker-compose-agent.yml file
             agent_image (str, optional): Docker image to use for the agent
+            project_name (str, optional): Docker Compose project name to use.
         """
         # Ensure docker_compose_path is absolute
         docker_compose_path = os.path.abspath(docker_compose_path)
@@ -708,8 +709,9 @@ class Repository:
         if not formatted_repo[0].isalnum():
             formatted_repo = 'p' + formatted_repo
         
-        # Create project name with formatted repo name - using bash command for timestamp
-        project_name = f"agent_{formatted_repo}_{self.id}_$(date +%s)"
+        # Create project name with formatted repo name.
+        if project_name is None:
+            project_name = f"agent_{formatted_repo}_{self.id}_$(date +%s)"
         
         # Extract project name prefix for filtering (remove timestamp part)
         project_prefix = f"agent_{formatted_repo}_{self.id}"

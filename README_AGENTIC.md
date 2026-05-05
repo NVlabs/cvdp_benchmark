@@ -198,6 +198,15 @@ services:
     working_dir: /code
 ```
 
+Agent images can request additional runtime environment variables and host mounts with Docker labels. The runner reads these labels with `docker image inspect` and passes through only environment variables that are already set in the host environment, so secret values are not written into the generated compose file:
+
+```dockerfile
+LABEL org.cvdp.agent.env="MY_AGENT_API_KEY,MY_AGENT_MODEL"
+LABEL org.cvdp.agent.mounts="env:MY_AGENT_USE_HOST_AUTH=1:~/.my-agent/auth.json:/auth/auth.json:ro"
+```
+
+The `org.cvdp.agent.mounts` label is semicolon-separated. Each mount is `source:target[:mode]`, optionally prefixed with `env:NAME=VALUE:` so the mount is only added when that host environment condition is true. You can add runtime-only entries without rebuilding the image with `CVDP_AGENT_ENV` and `CVDP_AGENT_MOUNTS`, using the same formats.
+
 ### Docker Compose for Test Harness
 
 The test harness uses a `docker-compose.yml` file from the dataset, or generates a default:

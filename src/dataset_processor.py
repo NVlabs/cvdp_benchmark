@@ -853,6 +853,9 @@ When generating files, return the file name in the correct place at the folder s
             if error_msg != f"Unable to process harness for id {id}":
                 print(f"Unexpected error in preparation for {id}: {error_msg}")
 
+    def _copy_agent_metadata_to_result(self, id, result):
+        return result
+
     def th_run(self, id, q : queue.Queue = None, model : OpenAI_Instance = None):
         """
         Override th_run to check for agent errors.
@@ -893,30 +896,8 @@ When generating files, return the file name in the correct place at the folder s
                 model = model
             )
             
-            # If there was an agent error, add it to the result
-            if id in self.runs and 'agent_error' in self.runs[id]:
-                if 'tests' in res:
-                    # Add agent error to test results if not already present
-                    agent_error_found = False
-                    for test in res['tests']:
-                        if 'error_msg' in test and test['error_msg'] and 'agent_error' in test['error_msg']:
-                            agent_error_found = True
-                            break
-                    
-                    if not agent_error_found:
-                        # Include agent logfile if available
-                        agent_logfile = self.runs[id].get('agent_logfile', None)
-                        res['tests'].append({
-                            "result": 1,
-                            "log": agent_logfile, 
-                            "error_msg": f"Agent error: {self.runs[id]['agent_error']}",
-                            "execution": 0.0
-                        })
-                        res['errors'] += 1
-            
-            # Add agent logfile to result metadata if available
-            if id in self.runs and 'agent_logfile' in self.runs[id]:
-                res['agent_logfile'] = self.runs[id]['agent_logfile']
+            # Add agent metadata without changing harness test counts.
+            self._copy_agent_metadata_to_result(id, res)
 
             q.put({id: res})
 
@@ -937,21 +918,8 @@ When generating files, return the file name in the correct place at the folder s
                 "errors": 1
             }
             
-            # Add agent error if there was one
-            if id in self.runs and 'agent_error' in self.runs[id]:
-                # Include agent logfile if available
-                agent_logfile = self.runs[id].get('agent_logfile', None)
-                error_result['tests'].append({
-                    "result": 1,
-                    "log": agent_logfile,
-                    "error_msg": f"Agent error: {self.runs[id]['agent_error']}",
-                    "execution": 0.0
-                })
-                error_result['errors'] += 1
-            
-            # Add agent logfile to result metadata if available
-            if id in self.runs and 'agent_logfile' in self.runs[id]:
-                error_result['agent_logfile'] = self.runs[id]['agent_logfile']
+            # Add agent metadata without adding a synthetic harness test.
+            self._copy_agent_metadata_to_result(id, error_result)
             
             # Put the error result in the queue so the main thread knows this task is done
             q.put({id: error_result})
@@ -1021,14 +989,14 @@ When generating files, return the file name in the correct place at the folder s
         # Check if any tasks failed during preparation
         failed_prep = [id for id, run in self.runs.items() if 'error_msg' in run]
         
-        def create_error_result(id):
+        def create_error_result(id, error_msg=None):
             """Create error result for failed preparation tasks"""
             category = self.context[id]['categories'][0]
             difficulty = self.context[id]['categories'][1]
             return {
                 "category": category,
                 "difficulty": difficulty,
-                "tests": [{"result": 1, "log": None, "error_msg": self.runs[id]['error_msg'], "execution": 0.0}],
+                "tests": [{"result": 1, "log": None, "error_msg": error_msg or self.runs[id]['error_msg'], "execution": 0.0}],
                 "errors": 1
             }
         
@@ -1040,6 +1008,15 @@ When generating files, return the file name in the correct place at the folder s
             failed_items=failed_prep,
             error_result_factory=create_error_result
         )
+
+        missing_results = [id for id in self.context.keys() if id not in result]
+        if missing_results:
+            print(f"WARNING: Missing execution results for {len(missing_results)} datapoints; marking them failed")
+            for id in missing_results:
+                result[id] = create_error_result(
+                    id,
+                    "Execution phase did not produce a result for this datapoint"
+                )
         
         return result
 
@@ -1431,6 +1408,350 @@ class CopilotProcessor (DatasetProcessor):
             print(f"  - Average consistency score: {refinement_stats['avg_consistency']:.2f}/10")
 
 class AgenticProcessor (DatasetProcessor):
+    AGENT_STATUS_COMPLETED = "completed"
+    AGENT_STATUS_COMPLETED_NO_PATCH = "completed_no_patch"
+    AGENT_STATUS_FAILED = "failed"
+    AGENT_STATUS_TIMEOUT = "timeout"
+    AGENT_STATUS_BUDGET_EXCEEDED = "budget_exceeded"
+
+    AGENT_WORKSPACE_DIRS = ("docs", "rtl", "verif")
+    AGENT_SNAPSHOT_DIRS = ("docs", "rtl", "verif", "rundir")
+    AGENT_INFRASTRUCTURE_FILES = {
+        "prompt.json",
+        "docker-compose.yml",
+    }
+    AGENT_INFRASTRUCTURE_DIRS = {
+        "before",
+        "src",
+    }
+    AGENT_GENERATED_DIRS = {
+        "rundir",
+        "__pycache__",
+        ".cache",
+        ".pytest_cache",
+    }
+
+    AGENT_ENV_LABEL = "org.cvdp.agent.env"
+    AGENT_MOUNTS_LABEL = "org.cvdp.agent.mounts"
+    AGENT_ENV_OVERRIDE = "CVDP_AGENT_ENV"
+    AGENT_MOUNTS_OVERRIDE = "CVDP_AGENT_MOUNTS"
+
+    def _build_agent_prompt_payload(self, id):
+        return {"prompt": self.context[id]['prompt']}
+
+    def _inspect_agent_labels(self, agent):
+        if not agent:
+            return {}
+
+        if not hasattr(self, "_agent_label_cache"):
+            self._agent_label_cache = {}
+        if agent in self._agent_label_cache:
+            return self._agent_label_cache[agent]
+
+        result = subprocess.run(
+            ["docker", "image", "inspect", agent, "--format", "{{ json .Config.Labels }}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"Warning: Could not inspect labels for agent image '{agent}'")
+            self._agent_label_cache[agent] = {}
+            return {}
+
+        label_text = result.stdout.strip()
+        if not label_text or label_text == "null":
+            labels = {}
+        else:
+            try:
+                labels = json.loads(label_text)
+            except json.JSONDecodeError:
+                print(f"Warning: Could not parse labels for agent image '{agent}'")
+                labels = {}
+
+        self._agent_label_cache[agent] = labels
+        return labels
+
+    def _split_agent_env_spec(self, value):
+        if not value:
+            return []
+        return [item.strip() for item in re.split(r"[,;\s]+", value) if item.strip()]
+
+    def _get_agent_environment(self, agent):
+        labels = self._inspect_agent_labels(agent)
+        env_names = []
+        env_names.extend(self._split_agent_env_spec(labels.get(self.AGENT_ENV_LABEL, "")))
+        env_names.extend(self._split_agent_env_spec(os.environ.get(self.AGENT_ENV_OVERRIDE, "")))
+
+        environment = []
+        seen = set()
+        for key in env_names:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                print(f"Warning: Ignoring invalid agent environment variable name '{key}'")
+                continue
+            if key in seen:
+                continue
+            if os.environ.get(key) is not None and os.environ.get(key) != "":
+                environment.append(key)
+                seen.add(key)
+
+        if environment:
+            print(f"Passing {len(environment)} agent environment variables from image metadata/config")
+        return environment
+
+    def _split_agent_mount_spec(self, value):
+        if not value:
+            return []
+        return [item.strip() for item in value.split(";") if item.strip()]
+
+    def _agent_mount_condition_matches(self, condition):
+        if not condition:
+            return True
+
+        if "=" in condition:
+            key, expected_value = condition.split("=", 1)
+            return os.environ.get(key) == expected_value
+
+        return os.environ.get(condition) is not None and os.environ.get(condition) != ""
+
+    def _parse_agent_mount_spec(self, spec):
+        condition = None
+        mount_spec = spec
+
+        if spec.startswith("env:"):
+            remaining = spec[len("env:"):]
+            if ":" not in remaining:
+                print(f"Warning: Ignoring invalid conditional agent mount '{spec}'")
+                return None
+            condition, mount_spec = remaining.split(":", 1)
+
+        parts = mount_spec.split(":")
+        if len(parts) < 2 or len(parts) > 3:
+            print(f"Warning: Ignoring invalid agent mount '{spec}'")
+            return None
+
+        source, target = parts[0], parts[1]
+        mode = parts[2] if len(parts) == 3 else None
+        return condition, source, target, mode
+
+    def _get_agent_mounts(self, agent):
+        labels = self._inspect_agent_labels(agent)
+        mount_specs = []
+        mount_specs.extend(self._split_agent_mount_spec(labels.get(self.AGENT_MOUNTS_LABEL, "")))
+        mount_specs.extend(self._split_agent_mount_spec(os.environ.get(self.AGENT_MOUNTS_OVERRIDE, "")))
+
+        mounts = []
+        seen = set()
+        for spec in mount_specs:
+            parsed = self._parse_agent_mount_spec(spec)
+            if parsed is None:
+                continue
+
+            condition, source, target, mode = parsed
+            if not self._agent_mount_condition_matches(condition):
+                continue
+
+            expanded_source = os.path.expandvars(os.path.expanduser(source))
+            if not os.path.exists(expanded_source):
+                print(f"Warning: Agent requested host mount '{source}', but it does not exist")
+                continue
+
+            mount = f"{expanded_source}:{target}"
+            if mode:
+                mount = f"{mount}:{mode}"
+
+            if mount not in seen:
+                mounts.append(mount)
+                seen.add(mount)
+
+        if mounts:
+            print(f"Adding {len(mounts)} agent-declared host mounts")
+        return mounts
+
+    def _normalize_agent_path(self, path):
+        return path.replace(os.sep, "/").lstrip("./")
+
+    def _is_agent_infrastructure_path(self, path):
+        normalized = self._normalize_agent_path(path)
+        if normalized in self.AGENT_INFRASTRUCTURE_FILES:
+            return True
+
+        parts = [part for part in normalized.split("/") if part]
+        if not parts:
+            return False
+
+        if parts[0] in self.AGENT_INFRASTRUCTURE_DIRS:
+            return True
+
+        return False
+
+    def _is_agent_generated_path(self, path):
+        normalized = self._normalize_agent_path(path)
+        parts = [part for part in normalized.split("/") if part]
+        return any(part in self.AGENT_GENERATED_DIRS for part in parts)
+
+    def _classify_agent_change_path(self, path):
+        if self._is_agent_generated_path(path):
+            return "ignored", "generated_artifact"
+        if self._is_agent_infrastructure_path(path):
+            return "violation", "benchmark_infrastructure"
+        if not self._is_agent_workspace_path(path):
+            return "violation", "outside_project_workspace"
+        return "accepted", None
+
+    def _snapshot_agent_infrastructure_files(self, issue_path):
+        snapshots = {}
+        for rel_path in self.AGENT_INFRASTRUCTURE_FILES:
+            path = os.path.join(issue_path, rel_path)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "rb") as f:
+                    snapshots[rel_path] = f.read()
+            except Exception as e:
+                logging.warning(f"Could not snapshot agent infrastructure file {path}: {e}")
+        return snapshots
+
+    def _detect_agent_infrastructure_file_changes(self, issue_path, snapshots):
+        violations = []
+        for rel_path, before_content in snapshots.items():
+            path = os.path.join(issue_path, rel_path)
+            if not os.path.exists(path):
+                violations.append({
+                    "path": self._normalize_agent_path(rel_path),
+                    "action": "deleted",
+                    "reason": "benchmark_infrastructure",
+                })
+                continue
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "rb") as f:
+                    after_content = f.read()
+            except Exception as e:
+                logging.warning(f"Could not inspect agent infrastructure file {path}: {e}")
+                continue
+            if after_content != before_content:
+                violations.append({
+                    "path": self._normalize_agent_path(rel_path),
+                    "action": "modified",
+                    "reason": "benchmark_infrastructure",
+                })
+        return violations
+
+    def _is_agent_workspace_path(self, path):
+        normalized = self._normalize_agent_path(path)
+        root = normalized.split("/", 1)[0]
+        return root in self.AGENT_WORKSPACE_DIRS
+
+    def _agent_metadata(self, status, returncode=None, logfile=None, execution=0.0, error_msg=None):
+        metadata = {
+            "agent_status": status,
+            "agent_returncode": returncode,
+            "agent_execution": execution,
+        }
+        if logfile:
+            metadata["agent_logfile"] = logfile
+        if error_msg:
+            metadata["agent_error"] = error_msg
+        return metadata
+
+    def _apply_agent_metadata(self, result, metadata):
+        result.update(metadata)
+        return result
+
+    def _mark_no_patch_if_applicable(self, metadata, has_changes):
+        if metadata.get("agent_status") == self.AGENT_STATUS_COMPLETED and not has_changes:
+            metadata["agent_status"] = self.AGENT_STATUS_COMPLETED_NO_PATCH
+        return metadata
+
+    def _classify_agent_failure(self, logfile, returncode):
+        if returncode == 0:
+            return self.AGENT_STATUS_COMPLETED, None
+
+        if logfile and os.path.exists(logfile):
+            try:
+                with open(logfile, "r", encoding="utf-8", errors="replace") as f:
+                    log_text = f.read().lower()
+                if "budget" in log_text and ("exceed" in log_text or "limit" in log_text):
+                    return self.AGENT_STATUS_BUDGET_EXCEEDED, "Agent budget limit was exceeded"
+            except Exception:
+                pass
+
+        return self.AGENT_STATUS_FAILED, f"Agent process exited with non-zero status: {returncode}"
+
+    def _cleanup_agent_compose_project(self, docker_compose_path, project_name):
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                docker_compose_path,
+                "-p",
+                project_name,
+                "down",
+                "--remove-orphans",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        result = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-aq",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        container_ids = result.stdout.split()
+        if container_ids:
+            subprocess.run(
+                ["docker", "rm", "-f", *container_ids],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    def _record_agent_metadata_for_run(self, id, result):
+        if id not in self.runs:
+            return
+
+        for key in [
+            "agent_status",
+            "agent_returncode",
+            "agent_execution",
+            "agent_logfile",
+            "agent_error",
+            "agent_contract_violations",
+            "agent_ignored_changes",
+            "agent_patch_file",
+        ]:
+            if key in result:
+                self.runs[id][key] = result[key]
+
+    def _copy_agent_metadata_to_result(self, id, result):
+        if id not in self.runs:
+            return result
+
+        for key in [
+            "agent_status",
+            "agent_returncode",
+            "agent_execution",
+            "agent_logfile",
+            "agent_error",
+            "agent_contract_violations",
+            "agent_ignored_changes",
+            "agent_patch_file",
+        ]:
+            if key in self.runs[id]:
+                result[key] = self.runs[id][key]
+
+        return result
 
     # ----------------------------------------
     # - Process JSON File
@@ -1444,6 +1765,7 @@ class AgenticProcessor (DatasetProcessor):
         # Initialize include flags to False by default
         self.include_golden_patch = False
         self.include_harness = False
+        self._agent_label_cache = {}
 
         # Ensure patch_image Docker image exists for agentic heavy processing
         result = subprocess.run(["docker", "images", "-q", "patch_image"],
@@ -1493,9 +1815,8 @@ class AgenticProcessor (DatasetProcessor):
         if 'cvdp_agentic_heavy' in id:
             # For agentic heavy datapoints, create minimal context with just prompt.json
             # This avoids the space overhead of full context restoration while still providing the prompt
-            import json
             minimal_context = {
-                'prompt.json': json.dumps({"prompt": self.context[id]['prompt']})
+                'prompt.json': json.dumps(self._build_agent_prompt_payload(id))
             }
             repo = repository.AgenticRepository(name, issue, minimal_context, harness, patches, host=self.host, network_name=getattr(self, 'network_name', None), manage_network=getattr(self, 'manage_network', True), requires_eda_license=requires_eda_license)
         else:
@@ -1515,7 +1836,7 @@ class AgenticProcessor (DatasetProcessor):
         issue_dir = os.path.join(self.prefix, "cvdp_" + "_".join(name[1:-1]))
 
         # add prompt.json to the context
-        context['prompt.json'] = json.dumps({"prompt" : self.context[id]['prompt']})
+        context['prompt.json'] = json.dumps(self._build_agent_prompt_payload(id))
 
         if id in self.agent_results:
             return self.agent_results[id]
@@ -1604,6 +1925,8 @@ class AgenticProcessor (DatasetProcessor):
                                     break
         
         # Create docker-compose configuration for the agent
+        agent_environment = self._get_agent_environment(agent)
+        agent_mounts = self._get_agent_mounts(agent)
         if use_git_workspace and workspace_volume:
             # Use volume-based mounting for git workspaces
             docker_compose = {
@@ -1616,11 +1939,7 @@ class AgenticProcessor (DatasetProcessor):
                             './rundir:/code/rundir'
                         ],
                         'working_dir': '/code',
-                        'environment': {
-                            'OPENAI_USER_KEY': config.get('OPENAI_USER_KEY', ''),
-                            'ANTHROPIC_API_KEY': config.get('ANTHROPIC_API_KEY', ''),
-                            'CLAUDE_CODE_MAX_TURNS': os.environ.get('CLAUDE_CODE_MAX_TURNS', ''),
-                        }
+                        'environment': agent_environment
                     }
                 },
                 'volumes': {
@@ -1644,15 +1963,16 @@ class AgenticProcessor (DatasetProcessor):
                             './prompt.json:/code/prompt.json'
                         ],
                         'working_dir': '/code',
-                        'environment': {
-                            'OPENAI_USER_KEY': config.get('OPENAI_USER_KEY', ''),
-                            'ANTHROPIC_API_KEY': config.get('ANTHROPIC_API_KEY', ''),
-                            'CLAUDE_CODE_MAX_TURNS': os.environ.get('CLAUDE_CODE_MAX_TURNS', ''),
-                        }
+                        'environment': agent_environment
                     }
                 }
             }
             print("[INFO] Using traditional directory-based mounting")
+
+        if not agent_environment:
+            docker_compose['services']['agent'].pop('environment', None)
+
+        docker_compose['services']['agent']['volumes'].extend(agent_mounts)
         
         # Add golden patch to volumes if it exists
         if hasattr(self, 'include_golden_patch') and self.include_golden_patch:
@@ -1777,13 +2097,15 @@ class AgenticProcessor (DatasetProcessor):
         # Create the run_docker_agent.sh script
         if repo_instance is not None:
             # Use Repository's method if we have a Repository instance
-            repo_instance.create_agent_script(docker_compose_path, agent)
+            repo_instance.create_agent_script(docker_compose_path, agent, project_name=project_name)
         else:
             # Otherwise use our local method
             self.create_agent_script(docker_compose_path, project_name)
         
         # Create path to the shell script
         script_path = os.path.join(os.path.dirname(docker_compose_path), 'run_docker_agent.sh')
+        start_time = time.time()
+        agent_timeout = repository.DOCKER_TIMEOUT_AGENT
         
         try:
             # Run the shell script and redirect output to logfile
@@ -1793,6 +2115,7 @@ class AgenticProcessor (DatasetProcessor):
             kill_cmd = f"docker compose -f {docker_compose_path} -p {project_name} kill agent"
             
             # Execute the script in a subprocess
+            timed_out = False
             with open(logfile, 'w') as log_file:
                 # Use our own exec_timeout style function for consistency with src/repository.py
                 p = subprocess.Popen(script_path, shell=True, stdout=log_file, stderr=subprocess.STDOUT)
@@ -1810,10 +2133,14 @@ class AgenticProcessor (DatasetProcessor):
                 # Wait for the process to complete with timeout
                 try:
                     # Use communicate with timeout instead of wait()
-                    p.communicate(timeout=repository.DOCKER_TIMEOUT)
+                    p.communicate(timeout=agent_timeout)
                     returncode = p.returncode
                 except subprocess.TimeoutExpired:
-                    print(f'Timeout for {script_path} ({repository.DOCKER_TIMEOUT}s) expired')
+                    timed_out = True
+                    timeout_msg = f"Agent timed out after {agent_timeout}s while running {script_path}"
+                    print(timeout_msg)
+                    print(f"\n{timeout_msg}", file=log_file)
+                    log_file.flush()
                     # Kill the process tree
                     if hasattr(repository, 'kill_process_tree'):
                         repository.kill_process_tree(p.pid)
@@ -1826,7 +2153,8 @@ class AgenticProcessor (DatasetProcessor):
                     
                     # Execute kill command
                     subprocess.run(kill_cmd, shell=True)
-                    returncode = 1  # Non-zero return code indicating failure
+                    self._cleanup_agent_compose_project(docker_compose_path, project_name)
+                    returncode = 124  # Common timeout return code
             
             # Legacy network cleanup - only runs if no shared network is configured
             # Since we now always use shared networks, this cleanup is effectively disabled
@@ -1857,8 +2185,25 @@ class AgenticProcessor (DatasetProcessor):
             
             # Note: Git workspace volume cleanup is handled by the repository's cleanup method
             # to ensure it persists for both harness and agent execution
-            
-            return returncode, logfile
+
+            execution = time.time() - start_time
+            if timed_out:
+                return self._agent_metadata(
+                    self.AGENT_STATUS_TIMEOUT,
+                    returncode=returncode,
+                    logfile=logfile,
+                    execution=execution,
+                    error_msg=f"Agent timed out after {agent_timeout}s",
+                )
+
+            status, error_msg = self._classify_agent_failure(logfile, returncode)
+            return self._agent_metadata(
+                status,
+                returncode=returncode,
+                logfile=logfile,
+                execution=execution,
+                error_msg=error_msg,
+            )
         except Exception as e:
             logging.error(f"Error running agent script: {str(e)}")
             
@@ -1883,8 +2228,14 @@ class AgenticProcessor (DatasetProcessor):
                     pass
             
             # Note: Git workspace volume cleanup is handled by the repository's cleanup method
-            
-            return 1, logfile
+
+            return self._agent_metadata(
+                self.AGENT_STATUS_FAILED,
+                returncode=1,
+                logfile=logfile,
+                execution=time.time() - start_time,
+                error_msg=f"Error running agent script: {str(e)}",
+            )
 
     def create_agent_script(self, docker_compose_path, project_name):
         """
@@ -2005,7 +2356,7 @@ class AgenticProcessor (DatasetProcessor):
             issue_path = os.path.join(repo_name, "harness", f"{issue_id}")
             
             # Add prompt.json to the context
-            context['prompt.json'] = json.dumps({"prompt": self.context[id]['prompt']})
+            context['prompt.json'] = json.dumps(self._build_agent_prompt_payload(id))
             
             result = context.copy()
             
@@ -2021,20 +2372,33 @@ class AgenticProcessor (DatasetProcessor):
                 if not self.golden:
                     # For context-heavy datapoints, just run the agent - volume-based patch generation
                     # is handled in agent_run method
-                    agent_status, agent_logfile = self.agent_run(issue_path, self.agent)
-                    
-                    # Store agent log file info
-                    result['agent_logfile'] = agent_logfile
-                    
-                    if agent_status != 0:
-                        error_msg = f"Agent process exited with non-zero status: {agent_status}"
-                        logging.error(error_msg)
-                        result['agent_error'] = error_msg
+                    protected_file_snapshots = self._snapshot_agent_infrastructure_files(issue_path)
+                    agent_metadata = self.agent_run(issue_path, self.agent)
+                    patch_file = os.path.join(issue_path, "agent_changes.patch")
+                    has_changes = False
+                    if os.path.exists(patch_file):
+                        result['agent_patch_file'] = patch_file
+                        with open(patch_file, 'r', encoding='utf-8', errors='replace') as f:
+                            patch_content = f.read().strip()
+                        has_changes = bool(patch_content) and patch_content != "# No changes detected"
+                    agent_contract_violations = self._detect_agent_infrastructure_file_changes(
+                        issue_path,
+                        protected_file_snapshots,
+                    )
+                    if agent_contract_violations:
+                        result['agent_contract_violations'] = agent_contract_violations
+                    self._mark_no_patch_if_applicable(agent_metadata, has_changes)
+                    self._apply_agent_metadata(result, agent_metadata)
+
+                    if 'agent_error' in result:
+                        logging.error(result['agent_error'])
                 
             else:
                 # Traditional agent processing for non-context-heavy datapoints
                 # Prepare directories for agent
-                dir_names = ["docs", "rundir", "rtl", "verif"]
+                dir_names = list(self.AGENT_SNAPSHOT_DIRS)
+                if hasattr(self, 'include_harness') and self.include_harness:
+                    dir_names.append("src")
                 before_dir = os.path.join(issue_path, "before")
                 os.makedirs(before_dir, exist_ok=True)
                 for d in dir_names:
@@ -2043,19 +2407,15 @@ class AgenticProcessor (DatasetProcessor):
                     os.makedirs(src, exist_ok=True)
                     if os.path.exists(bak): shutil.rmtree(bak)
                     shutil.copytree(src, bak)
+                protected_file_snapshots = self._snapshot_agent_infrastructure_files(issue_path)
                 
                 if not self.golden:
                     # Run agent
-                    agent_status, agent_logfile = self.agent_run(issue_path, self.agent)
-                
-                    # Store agent log file info
-                    result['agent_logfile'] = agent_logfile
-                    
-                    if agent_status != 0:
-                        error_msg = f"Agent process exited with non-zero status: {agent_status}"
-                        logging.error(error_msg)
-                        # Store error but also continue to process any files that might have been created
-                        result['agent_error'] = error_msg
+                    agent_metadata = self.agent_run(issue_path, self.agent)
+                    self._apply_agent_metadata(result, agent_metadata)
+
+                    if 'agent_error' in result:
+                        logging.error(result['agent_error'])
                     
                     # Clean up any stray Docker resources (with error suppression)
                     try:
@@ -2079,6 +2439,9 @@ class AgenticProcessor (DatasetProcessor):
                     # Process differences even if agent had errors, in case partial results were created
                     # Track all changes in a single unified patch
                     unified_patch = []
+                    accepted_changes = False
+                    agent_contract_violations = []
+                    agent_ignored_changes = []
                 
                     for d in dir_names:
                         orig_dir = os.path.join(before_dir, d)
@@ -2092,26 +2455,47 @@ class AgenticProcessor (DatasetProcessor):
                             try:
                                 with open(mod_path, 'r', encoding='utf-8', errors='replace') as f:
                                     mod_content = f.read()
+
+                                change_action = "added"
+                                orig_content = None
+                                if rel_path in orig_files:
+                                    with open(orig_files[rel_path], 'r', encoding='utf-8', errors='replace') as f:
+                                        orig_content = f.read()
+                                    if orig_content == mod_content:
+                                        continue
+                                    change_action = "modified"
+
+                                change_policy, change_reason = self._classify_agent_change_path(context_path)
+                                if change_policy != "accepted":
+                                    change_record = {
+                                        "path": self._normalize_agent_path(context_path),
+                                        "action": change_action,
+                                        "reason": change_reason,
+                                    }
+                                    if change_policy == "ignored":
+                                        agent_ignored_changes.append(change_record)
+                                    else:
+                                        agent_contract_violations.append(change_record)
+                                    continue
                                 
                                 # Added or modified file
                                 if rel_path not in orig_files:
                                     # New file - use directly
                                     result[context_path] = mod_content
+                                    accepted_changes = True
                                     # Add new file to unified patch
                                     unified_patch.append(f"--- /dev/null\n+++ b/{context_path}\n@@ -0,0 +1,{len(mod_content.splitlines())} @@")
                                     for line in mod_content.splitlines():
                                         unified_patch.append(f"+{line}")
                                     unified_patch.append("")  # Empty line between files
                                 else:
-                                    with open(orig_files[rel_path], 'r', encoding='utf-8', errors='replace') as f:
-                                        orig_content = f.read()
-                                    if orig_content != mod_content:
-                                        # Add diff to unified patch
-                                        diff = self._diff(orig_content, mod_content, context_path)
-                                        unified_patch.append(diff)
-                                        unified_patch.append("")  # Empty line between files
-                                        # Use modified content directly
-                                        result[context_path] = mod_content
+                                    # Add diff to unified patch
+                                    diff = self._diff(orig_content, mod_content, context_path)
+                                    unified_patch.append(diff)
+                                    unified_patch.append("")  # Empty line between files
+                                    # Use modified content directly
+                                    result[context_path] = mod_content
+                                    accepted_changes = True
                             except Exception as file_e:
                                 file_error = f"Error processing {mod_path}: {str(file_e)}"
                                 logging.error(file_error)
@@ -2122,6 +2506,19 @@ class AgenticProcessor (DatasetProcessor):
                         for rel_path, orig_path in orig_files.items():
                             if rel_path not in mod_files:
                                 context_path = os.path.join(d, rel_path)
+                                change_policy, change_reason = self._classify_agent_change_path(context_path)
+                                if change_policy != "accepted":
+                                    change_record = {
+                                        "path": self._normalize_agent_path(context_path),
+                                        "action": "deleted",
+                                        "reason": change_reason,
+                                    }
+                                    if change_policy == "ignored":
+                                        agent_ignored_changes.append(change_record)
+                                    else:
+                                        agent_contract_violations.append(change_record)
+                                    continue
+
                                 with open(orig_path, 'r', encoding='utf-8', errors='replace') as f:
                                     orig_content = f.read()
                                 # Add deletion to unified patch
@@ -2129,6 +2526,15 @@ class AgenticProcessor (DatasetProcessor):
                                 for line in orig_content.splitlines():
                                     unified_patch.append(f"-{line}")
                                 unified_patch.append("")  # Empty line between files
+                                result.pop(context_path, None)
+                                accepted_changes = True
+
+                    agent_contract_violations.extend(
+                        self._detect_agent_infrastructure_file_changes(
+                            issue_path,
+                            protected_file_snapshots,
+                        )
+                    )
             
                     # Write the unified patch file
                     if unified_patch:
@@ -2136,25 +2542,57 @@ class AgenticProcessor (DatasetProcessor):
                         with open(patch_file, 'w', encoding='utf-8') as f:
                             f.write('\n'.join(unified_patch))
                         result['agent_patch_file'] = patch_file
+
+                    if agent_contract_violations:
+                        result['agent_contract_violations'] = agent_contract_violations
+                    if agent_ignored_changes:
+                        result['agent_ignored_changes'] = agent_ignored_changes
+
+                    self._mark_no_patch_if_applicable(agent_metadata, accepted_changes)
+                    self._apply_agent_metadata(result, agent_metadata)
             
             # Store the results for later use
             self.agent_results[id] = result
             
             # If this ID is already in the runs dict from preparation phase, update it to include agent status
-            if id in self.runs:
-                if 'agent_error' in result:
-                    self.runs[id]['agent_error'] = result['agent_error']
+            self._record_agent_metadata_for_run(id, result)
             
         except Exception as e:
             error_msg = str(e)
             logging.error(f"Error in agent processing for {id}: {error_msg}")
             # Create basic context with error information
             self.agent_results[id] = context.copy() if 'context' in locals() else {}
-            self.agent_results[id]['agent_error'] = f"th_agent: {error_msg}"
+            self.agent_results[id].update(self._agent_metadata(
+                self.AGENT_STATUS_FAILED,
+                returncode=1,
+                error_msg=f"th_agent: {error_msg}",
+            ))
             
             # If this ID is already in the runs dict from preparation phase, update it with error
-            if id in self.runs:
-                self.runs[id]['agent_error'] = f"th_agent: {error_msg}"
+            self._record_agent_metadata_for_run(id, self.agent_results[id])
+
+    def _print_agent_summary(self):
+        status_counts = {}
+        violation_count = 0
+        ignored_change_count = 0
+
+        for result in self.agent_results.values():
+            status = result.get("agent_status", "unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            violation_count += len(result.get("agent_contract_violations", []))
+            ignored_change_count += len(result.get("agent_ignored_changes", []))
+
+        if not status_counts:
+            print("Agent processing produced no agent status records")
+            return
+
+        print("Agent status summary:")
+        for status in sorted(status_counts):
+            print(f"  - {status}: {status_counts[status]}")
+        if violation_count:
+            print(f"  - contract violations: {violation_count}")
+        if ignored_change_count:
+            print(f"  - ignored generated changes: {ignored_change_count}")
 
     def all_agent(self):
         """
@@ -2167,6 +2605,7 @@ class AgenticProcessor (DatasetProcessor):
             task_func=self.th_agent,
             items=list(self.context.keys())
         )
+        self._print_agent_summary()
 
     def result_context (self, id = 0, context = {}, patch : dict = {}):
         """
