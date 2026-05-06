@@ -396,6 +396,9 @@ class Repository:
         # Extract project name prefix for filtering (remove timestamp)
         project_prefix = "_".join(project_name.split("_")[:-1])
 
+        harness_home = "/rundir" if "-w /rundir" in cmd else "/code/rundir"
+        harness_env = f"-e HOME={harness_home} -e XDG_CACHE_HOME={harness_home}/.cache"
+
         # Create the docker command with project name
         # line_cmd = f"docker compose -f {docker} -p {project_name} run {cmd} {service}"
         kill_cmd = f"docker compose -f {docker} -p {project_name} kill {service}"
@@ -463,9 +466,9 @@ class Repository:
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir --entrypoint bash {cmd} {service}\n")
+            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID {harness_env} --entrypoint bash {cmd} {service}\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir {cmd} {service}\n")
+            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID {harness_env} {cmd} {service}\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
