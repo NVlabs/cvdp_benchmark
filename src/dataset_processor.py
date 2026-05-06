@@ -1880,22 +1880,48 @@ class AgenticProcessor (DatasetProcessor):
         else:
             return self.result_context(int(name [-1]), context, self.context [id]['patch'])
 
-    def agent_run (self, issue_path : str = '', agent : str = '', monitor_size=True, **kargs):
+    def _infer_agent_data_id_from_issue_path(self, issue_path):
+        issue_id = os.path.basename(issue_path)
+        harness_dir = os.path.dirname(issue_path)
+        repo_dir = os.path.basename(os.path.dirname(harness_dir))
+        issue_suffix = issue_id.lstrip("0") or "0"
+
+        matches = []
+        for candidate_id in self.context:
+            candidate_repo_dir, sep, candidate_suffix = candidate_id.rpartition("_")
+            if not sep:
+                continue
+            if (candidate_suffix.lstrip("0") or "0") != issue_suffix:
+                continue
+            if candidate_repo_dir == repo_dir:
+                matches.append(candidate_id)
+
+        if len(matches) > 1:
+            raise ValueError(f"Ambiguous datapoint id for {issue_path}: {matches}")
+        if matches:
+            return matches[0]
+        return None
+
+    def _resolve_agent_data_id(self, issue_path, data_id=None):
+        inferred_data_id = self._infer_agent_data_id_from_issue_path(issue_path)
+        if data_id is not None:
+            if data_id not in self.context:
+                raise ValueError(f"Unknown datapoint id for agent run: {data_id}")
+            if inferred_data_id is not None and inferred_data_id != data_id:
+                raise ValueError(
+                    f"Datapoint id {data_id} does not match issue path {issue_path} "
+                    f"(resolved {inferred_data_id})"
+                )
+            return data_id
+        return inferred_data_id
+
+    def agent_run (self, issue_path : str = '', agent : str = '', monitor_size=True, data_id=None, **kargs):
         # Create docker-compose-agent.yml file
         docker_compose_path = os.path.join(issue_path, "docker-compose-agent.yml")
+        data_id = self._resolve_agent_data_id(issue_path, data_id)
 
         # If requested, create a golden patch file for the issue
         if hasattr(self, 'include_golden_patch') and self.include_golden_patch:
-            # First, find the issue ID from the issue_path
-            issue_id = os.path.basename(issue_path)
-            
-            # Find the corresponding ID in our context data
-            data_id = None
-            for id in self.context:
-                if str(issue_id) in id:
-                    data_id = id
-                    break
-            
             if data_id and 'patch' in self.context[data_id]:
                 # Get the patch data
                 patch_data = self.context[data_id]['patch']
@@ -1913,14 +1939,6 @@ class AgenticProcessor (DatasetProcessor):
                         f.write(f"# File: {file_path}\n")
                         f.write(patch_content)
                         f.write("\n\n")
-        
-        # Check if this is a context-heavy datapoint that needs git repository handling
-        issue_id = os.path.basename(issue_path)
-        data_id = None
-        for id in self.context:
-            if str(issue_id) in id:
-                data_id = id
-                break
         
         use_git_workspace = False
         workspace_volume = None
@@ -2406,7 +2424,7 @@ class AgenticProcessor (DatasetProcessor):
                     # For context-heavy datapoints, just run the agent - volume-based patch generation
                     # is handled in agent_run method
                     protected_file_snapshots = self._snapshot_agent_infrastructure_files(issue_path)
-                    agent_metadata = self.agent_run(issue_path, self.agent)
+                    agent_metadata = self.agent_run(issue_path, self.agent, data_id=id)
                     patch_file = os.path.join(issue_path, "agent_changes.patch")
                     has_changes = False
                     if os.path.exists(patch_file):
@@ -2440,7 +2458,7 @@ class AgenticProcessor (DatasetProcessor):
                 
                 if not self.golden:
                     # Run agent
-                    agent_metadata = self.agent_run(issue_path, self.agent)
+                    agent_metadata = self.agent_run(issue_path, self.agent, data_id=id)
                     self._apply_agent_metadata(result, agent_metadata)
 
                     if 'agent_error' in result:
