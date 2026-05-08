@@ -10,7 +10,7 @@ Runs one or more models/agents across one or more dataset variants and
 produces a summary table (datasets × models/agents) plus a JSON report.
 
 Usage:
-  # Sweep two models across all nonagentic datasets:
+  # Sweep two models across all public v1.1.0 nonagentic datasets:
   python tools/model_sweep.py -m openai-gpt-5.2 nemotron-ultra-253b -f nonagentic
 
   # Sweep an agent:
@@ -28,30 +28,44 @@ import subprocess
 import sys
 
 
-DEFAULT_DATASET_DIR = os.path.expanduser("~/cvdp_benchmark_dataset")
-DATASET_GLOB = "cvdp_v1.0.4_*.jsonl"
+DEFAULT_DATASET_DIR = os.path.expanduser("~/for_github/cvdp-benchmark-dataset")
+DEFAULT_DATASET_VERSION = "v1.1.0"
 
 
-def discover_datasets(dataset_dir: str, filter_str: str | None = None) -> list[str]:
-    """Return sorted list of matching dataset files (excludes _with_solutions variants)."""
-    pattern = os.path.join(dataset_dir, DATASET_GLOB)
+def discover_datasets(
+    dataset_dir: str,
+    filter_str: str | None = None,
+    dataset_version: str = DEFAULT_DATASET_VERSION,
+    include_additional: bool = False,
+    include_examples: bool = False,
+    include_with_solutions: bool = False,
+) -> list[str]:
+    """Return sorted list of matching public dataset files."""
+    pattern = os.path.join(dataset_dir, f"cvdp_{dataset_version}_*.jsonl")
     files = sorted(glob.glob(pattern))
-    files = [f for f in files if not os.path.basename(f).endswith("_with_solutions.jsonl")]
+    if not include_with_solutions:
+        files = [f for f in files if not os.path.basename(f).endswith("_with_solutions.jsonl")]
+    if not include_additional:
+        files = [f for f in files if "_additional" not in os.path.basename(f)]
+    if not include_examples:
+        prefix = f"cvdp_{dataset_version}_example_"
+        files = [f for f in files if not os.path.basename(f).startswith(prefix)]
     if filter_str:
         files = [f for f in files if filter_str in os.path.basename(f)]
     return files
 
 
-def variant_name(dataset_file: str) -> str:
+def variant_name(dataset_file: str, dataset_version: str = DEFAULT_DATASET_VERSION) -> str:
     """Extract a short variant name from a dataset filename.
 
-    cvdp_v1.0.4_nonagentic_code_generation_no_commercial.jsonl
+    cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl
     -> nonagentic_code_generation_no_commercial
     """
     base = os.path.basename(dataset_file)
     name = base
-    if name.startswith("cvdp_v1.0.4_"):
-        name = name[len("cvdp_v1.0.4_"):]
+    prefix = f"cvdp_{dataset_version}_"
+    if name.startswith(prefix):
+        name = name[len(prefix):]
     if name.endswith(".jsonl"):
         name = name[: -len(".jsonl")]
     return name
@@ -76,6 +90,7 @@ def run_benchmark(
     model: str | None,
     agent: str | None,
     custom_factory: str | None,
+    force_copilot: bool,
 ) -> bool:
     """
     Invoke run_samples.py for the given dataset/model/agent combination.
@@ -97,6 +112,8 @@ def run_benchmark(
         cmd += ["-g", agent]
     if custom_factory:
         cmd += ["-c", custom_factory]
+    if force_copilot:
+        cmd += ["--force-copilot"]
 
     print(f"  Running: {' '.join(cmd)}")
     try:
@@ -204,6 +221,11 @@ def main() -> int:
         help=f"Directory containing dataset files (default: {DEFAULT_DATASET_DIR})",
     )
     parser.add_argument(
+        "--dataset-version",
+        default=DEFAULT_DATASET_VERSION,
+        help=f"Dataset version to discover (default: {DEFAULT_DATASET_VERSION})",
+    )
+    parser.add_argument(
         "-f", "--filter",
         dest="filter_str",
         default=None,
@@ -229,6 +251,11 @@ def main() -> int:
         help="Path to custom model factory (passed to run_samples.py -c)",
     )
     parser.add_argument(
+        "--force-copilot",
+        action="store_true",
+        help="Pass --force-copilot to run_samples.py",
+    )
+    parser.add_argument(
         "-t", "--threads",
         type=int,
         default=4,
@@ -252,6 +279,21 @@ def main() -> int:
         help="Skip if work directory already exists (resumable runs)",
     )
     parser.add_argument(
+        "--include-additional",
+        action="store_true",
+        help="Include additional dataset variants in discovery",
+    )
+    parser.add_argument(
+        "--include-examples",
+        action="store_true",
+        help="Include example dataset variants in discovery",
+    )
+    parser.add_argument(
+        "--include-with-solutions",
+        action="store_true",
+        help="Include _with_solutions dataset variants in discovery",
+    )
+    parser.add_argument(
         "--output",
         default="sweep_report.json",
         help="Path to write sweep_report.json (default: sweep_report.json)",
@@ -262,9 +304,16 @@ def main() -> int:
         parser.error("At least one of --models (-m) or --agents (-g) must be provided")
 
     # Discover dataset files
-    dataset_files = discover_datasets(args.dataset_dir, args.filter_str)
+    dataset_files = discover_datasets(
+        dataset_dir=args.dataset_dir,
+        filter_str=args.filter_str,
+        dataset_version=args.dataset_version,
+        include_additional=args.include_additional,
+        include_examples=args.include_examples,
+        include_with_solutions=args.include_with_solutions,
+    )
     if not dataset_files:
-        print(f"ERROR: No dataset files found in {args.dataset_dir} matching '{DATASET_GLOB}'")
+        print(f"ERROR: No dataset files found in {args.dataset_dir} matching 'cvdp_{args.dataset_version}_*.jsonl'")
         if args.filter_str:
             print(f"       (with filter: '{args.filter_str}')")
         return 1
@@ -282,7 +331,7 @@ def main() -> int:
     results: list[dict] = []
 
     for dataset_file in dataset_files:
-        variant = variant_name(dataset_file)
+        variant = variant_name(dataset_file, args.dataset_version)
         print(f"=== Variant: {variant} ===")
 
         for model_or_agent, is_agent in targets:
@@ -302,6 +351,7 @@ def main() -> int:
                     model=None if is_agent else model_or_agent,
                     agent=model_or_agent if is_agent else None,
                     custom_factory=args.custom_factory,
+                    force_copilot=args.force_copilot,
                 )
 
             passed, total = get_pass_stats(work_dir)
