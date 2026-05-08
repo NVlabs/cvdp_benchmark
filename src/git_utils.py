@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -16,6 +16,7 @@ import hashlib
 import time
 import threading
 import tempfile
+import shutil
 from collections import defaultdict
 from typing import Dict, Optional, Tuple
 from .config_manager import config
@@ -65,9 +66,43 @@ def normalize_repo_url(repo_url: str) -> str:
         return repo_url
 
 
+def is_remote_repo_reference(repo_url: str) -> bool:
+    """Return True when a repo reference should be treated as a remote URL."""
+    return "://" in repo_url or "@" in repo_url
+
+
+def resolve_heavy_repo_reference(repo_ref: Optional[str], repos_path: Optional[str]) -> Optional[str]:
+    """
+    Resolve a context-heavy datapoint repo reference under CVDP_HEAVY_REPOS_PATH.
+
+    If a datapoint names ``my_repo`` and the configured directory contains either
+    ``my_repo/`` or ``my_repo.bundle``, return the matching local path. Directory
+    matches are preferred to preserve the previous unpacked-repo behavior.
+    """
+    if not repo_ref or not repos_path:
+        return repo_ref
+
+    if os.path.isabs(repo_ref) or is_remote_repo_reference(repo_ref):
+        return repo_ref
+
+    repo_path = os.path.join(repos_path, repo_ref)
+    if os.path.exists(repo_path):
+        return repo_path
+
+    if not repo_path.endswith(".bundle"):
+        bundle_path = f"{repo_path}.bundle"
+        if os.path.isfile(bundle_path):
+            return bundle_path
+
+    return repo_path
+
+
 def get_repo_mirror_filename(repo_url: str) -> str:
     """Return the mirror directory name used for a repository URL or local path."""
-    mirror_key = os.path.abspath(repo_url) if os.path.isdir(repo_url) else normalize_repo_url(repo_url)
+    if os.path.isdir(repo_url) or os.path.isfile(repo_url):
+        mirror_key = os.path.abspath(repo_url)
+    else:
+        mirror_key = normalize_repo_url(repo_url)
     return f"{get_repo_hash(mirror_key)}.git"
 
 
@@ -167,26 +202,32 @@ class GitRepositoryManager:
         Get or create a shared mirror for the given repository URL.
 
         Args:
-            repo_url: Git repository URL or local directory path
+            repo_url: Git repository URL, local directory path, or local bundle path
 
         Returns:
             Path to the shared mirror directory
         """
-        # Handle local directory paths — create a bare mirror from them
-        if os.path.isdir(repo_url):
+        # Handle local directory paths and bundle files by creating a bare mirror
+        # from them. Bundles are immutable snapshots, so an existing mirror is
+        # reused just like local unpacked repositories.
+        if os.path.isdir(repo_url) or os.path.isfile(repo_url):
             abs_path = os.path.abspath(repo_url)
             mirror_filename = get_repo_mirror_filename(repo_url)
             repo_hash = mirror_filename.removesuffix(".git")
             mirror_path = os.path.join(self.mirrors_dir, mirror_filename)
             log_file = os.path.join(self.logs_dir, f"{repo_hash}_clone.log")
+            source_kind = "local repo" if os.path.isdir(repo_url) else "local bundle"
+            clone_cmd = ["git", "clone", "--mirror", abs_path, mirror_path]
+            if os.path.isdir(repo_url):
+                clone_cmd.insert(3, "--local")
 
             with _repo_locks[mirror_path]:
                 if not os.path.exists(mirror_path):
-                    print(f"[INFO] Creating mirror from local repo {abs_path}")
+                    print(f"[INFO] Creating mirror from {source_kind} {abs_path}")
                     with open(log_file, 'w') as logfile:
                         try:
                             subprocess.run(
-                                ["git", "clone", "--mirror", "--local", abs_path, mirror_path],
+                                clone_cmd,
                                 check=True,
                                 stdout=logfile,
                                 stderr=subprocess.STDOUT,
@@ -202,14 +243,14 @@ class GitRepositoryManager:
                                 stderr=subprocess.STDOUT,
                                 text=True
                             )
-                            print(f"[INFO] Successfully created mirror from local repo: {mirror_path}")
+                            print(f"[INFO] Successfully created mirror from {source_kind}: {mirror_path}")
                         except subprocess.CalledProcessError as e:
-                            print(f"[ERROR] Failed to mirror local repo {abs_path}: {e}")
+                            print(f"[ERROR] Failed to mirror {source_kind} {abs_path}: {e}")
                             if os.path.exists(mirror_path):
-                                subprocess.run(["rm", "-rf", mirror_path], check=False)
+                                shutil.rmtree(mirror_path, ignore_errors=True)
                             raise
                 else:
-                    print(f"[INFO] Using existing mirror for local repo: {mirror_path}")
+                    print(f"[INFO] Using existing mirror for {source_kind}: {mirror_path}")
 
             return os.path.abspath(mirror_path)
 

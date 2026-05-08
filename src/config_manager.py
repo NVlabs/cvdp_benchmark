@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -117,7 +117,7 @@ class ConfigManager:
         self.register_config("CUSTOM_MODEL_FACTORY", required=False,
                            description="Path to custom model factory implementation")
         self.register_config("CVDP_HEAVY_REPOS_PATH", required=False,
-                           description="Path to directory containing cvdp_agentic_heavy_* local git repos (unpacked clean bundles)")
+                           description="Path to directory containing cvdp_agentic_heavy_* local git repos or .bundle files")
         
         # Docker and Resource Management
         self.register_config("DOCKER_QUOTA_THRESHOLD_MB", default=200, type_cast=int,

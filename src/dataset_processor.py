@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
@@ -2331,13 +2331,14 @@ class AgenticProcessor (DatasetProcessor):
         commit_sha = getattr(self, "commit_hash", None) or ctx.get("context", {}).get("commit")
         data_point = id.split("_")
 
-        # Resolve bare repo name to full local path when CVDP_HEAVY_REPOS_PATH is set
+        # Resolve bare repo names under CVDP_HEAVY_REPOS_PATH. This supports
+        # either unpacked repositories (my_repo/) or Git bundles
+        # (my_repo.bundle), with directories taking precedence.
         cvdp_heavy_repos_path = config.get("CVDP_HEAVY_REPOS_PATH")
-        if cvdp_heavy_repos_path and repo_url and not os.path.isabs(repo_url) and "://" not in repo_url and "@" not in repo_url:
-            repo_url = os.path.join(cvdp_heavy_repos_path, repo_url)
+        repo_url = git_utils.resolve_heavy_repo_reference(repo_url, cvdp_heavy_repos_path)
 
         try:
-            if not os.getenv("CLONE_HTTP") and "github.com/" in repo_url if repo_url else False:
+            if repo_url and not os.path.exists(repo_url) and not os.getenv("CLONE_HTTP") and "github.com/" in repo_url:
                 repo_url   = repo_url.split("github.com/")[-1]
                 repo_url   = f"git@github.com:{repo_url}.git"
         except:
