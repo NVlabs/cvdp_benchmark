@@ -206,11 +206,40 @@ class Report:
         failing_tests      = []  # Track all failing tests
         passing_tests      = []  # Track all passing tests
         scores_by_problem = {}  # Track scores per problem for score-based categories (BLEU, LLM, etc.)
+        agent_status_counts = {}
+        agent_runs = []
+        agent_contract_violations = []
+        agent_ignored_changes = []
 
         for id, report in self.raw_logs.items():
 
             category = report['category']
             diff     = report['difficulty']
+
+            if 'agent_status' in report:
+                status = report.get('agent_status', 'unknown')
+                agent_status_counts[status] = agent_status_counts.get(status, 0) + 1
+                agent_runs.append({
+                    'id': id,
+                    'category': category,
+                    'difficulty': diff,
+                    'status': status,
+                    'returncode': report.get('agent_returncode'),
+                    'execution': report.get('agent_execution'),
+                    'log': report.get('agent_logfile'),
+                    'error_msg': report.get('agent_error'),
+                    'patch_file': report.get('agent_patch_file')
+                })
+
+                for violation in report.get('agent_contract_violations', []):
+                    item = {'id': id, 'category': category, 'difficulty': diff}
+                    item.update(violation)
+                    agent_contract_violations.append(item)
+
+                for ignored_change in report.get('agent_ignored_changes', []):
+                    item = {'id': id, 'category': category, 'difficulty': diff}
+                    item.update(ignored_change)
+                    agent_ignored_changes.append(item)
 
             if category not in self.categories:
 
@@ -424,8 +453,16 @@ class Report:
             'passing_tests': passing_tests
         }
 
+        if agent_status_counts:
+            self.categories['agent_details'] = {
+                'status_counts': agent_status_counts,
+                'runs': agent_runs,
+                'contract_violations': agent_contract_violations,
+                'ignored_changes': agent_ignored_changes
+            }
+
         # Average after loop
-        self.avg = total_exec_time / tests
+        self.avg = total_exec_time / tests if tests else 0
 
 if __name__ == "__main__":
 

@@ -82,7 +82,7 @@ def create_docker_network(network_name):
         print(f"Error creating Docker network '{network_name}': {str(e)}")
         return False
 
-def remove_docker_network(network_name):
+def remove_docker_network(network_name, retries=5, retry_delay=1):
     """
     Remove a Docker bridge network if it exists.
     
@@ -103,20 +103,28 @@ def remove_docker_network(network_name):
             # Don't print a message when the network doesn't exist to reduce verbosity
             return True
             
-        # Remove the network
-        print(f"Removing Docker network '{network_name}'")
-        result = subprocess.run(
-            f"docker network rm {network_name}",
-            shell=True, capture_output=True, text=True
-        )
-        
-        if result.returncode == 0:
-            print(f"Successfully removed Docker network '{network_name}'")
-            return True
-        else:
-            print(f"Failed to remove Docker network '{network_name}': {result.stderr}")
-            return False
-            
+        for attempt in range(1, retries + 1):
+            print(f"Removing Docker network '{network_name}'")
+            result = subprocess.run(
+                f"docker network rm {network_name}",
+                shell=True, capture_output=True, text=True
+            )
+
+            if result.returncode == 0:
+                print(f"Successfully removed Docker network '{network_name}'")
+                return True
+
+            stderr = result.stderr.strip()
+            if "active endpoints" not in stderr or attempt == retries:
+                print(f"Failed to remove Docker network '{network_name}': {result.stderr}")
+                return False
+
+            print(
+                f"Docker network '{network_name}' still has active endpoints; "
+                f"retrying removal ({attempt}/{retries})"
+            )
+            time.sleep(retry_delay)
+
     except Exception as e:
         print(f"Error removing Docker network '{network_name}': {str(e)}")
         return False
@@ -171,4 +179,4 @@ def add_network_to_docker_compose(docker_compose_path, network_name):
             
     except Exception as e:
         print(f"Error adding network to docker-compose file {docker_compose_path}: {str(e)}")
-        return False 
+        return False

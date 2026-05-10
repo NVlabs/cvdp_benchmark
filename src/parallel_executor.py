@@ -54,7 +54,6 @@ class TaskQueue(queue.Queue):
                     except Exception as e:
                         # Log other exceptions but don't re-raise them
                         logging.error(f"Error in task {task_name}: {str(e)}")
-                        self.task_done()
                         continue
                 else:
                     # No timeout configured
@@ -63,7 +62,6 @@ class TaskQueue(queue.Queue):
                     except Exception as e:
                         # Log other exceptions but don't re-raise them
                         logging.error(f"Error in task {task_name}: {str(e)}")
-                        self.task_done()
                         continue
                     
             except Exception as e:
@@ -237,7 +235,7 @@ class ParallelExecutor:
         if task_queue.unfinished_tasks > 0:
             print(f"WARNING: {task_queue.unfinished_tasks} {self.phase_name.lower()} tasks did not complete successfully")
         else:
-            print(f"All {self.phase_name.lower()} tasks completed successfully")
+            print(f"All {self.phase_name.lower()} tasks completed")
     
     def _collect_results(self, result_queue: queue.Queue, expected_results: int) -> Dict[str, Any]:
         """
@@ -271,4 +269,4 @@ class ParallelExecutor:
                 # Handle unexpected result format
                 logging.warning(f"Unexpected result format: {result_item}")
                 
-        return results 
+        return results
