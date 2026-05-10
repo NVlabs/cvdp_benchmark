@@ -594,6 +594,8 @@ class Repository:
                 script_file.write("cat > \"$PATCH_DIR/patch.diff\" << 'PATCH_EOF'\n")
                 if patches:
                     for file_path, patch_body in patches.items():
+                        if not patch_body or not patch_body.strip():
+                            continue
                         # Use same format as GitRepositoryManager: add proper headers
                         filename = f"{root_dir}/{file_path}" if root_dir else file_path
                         script_file.write(f"--- a/{filename}\n")

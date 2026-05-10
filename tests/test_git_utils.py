@@ -112,5 +112,44 @@ class BundleMirrorTest(unittest.TestCase):
             self.assertEqual(is_bare, "true")
 
 
+class PatchPreparationTest(unittest.TestCase):
+
+    def test_skips_blank_patch_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = GitRepositoryManager.__new__(GitRepositoryManager)
+
+            manager._prepare_patch_files(
+                tmp,
+                {
+                    "rtl/empty.sv": "",
+                    "rtl/whitespace.sv": " \n\t",
+                },
+                root_dir="external",
+            )
+
+            with open(os.path.join(tmp, "patch.diff"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "")
+
+    def test_writes_nonblank_patch_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manager = GitRepositoryManager.__new__(GitRepositoryManager)
+
+            manager._prepare_patch_files(
+                tmp,
+                {
+                    "rtl/empty.sv": "",
+                    "rtl/real.sv": "@@ -1 +1 @@\n-old\n+new\n",
+                },
+                root_dir="external",
+            )
+
+            with open(os.path.join(tmp, "patch.diff"), encoding="utf-8") as f:
+                patch = f.read()
+
+            self.assertNotIn("empty.sv", patch)
+            self.assertIn("--- a/external/rtl/real.sv", patch)
+            self.assertIn("@@ -1 +1 @@", patch)
+
+
 if __name__ == "__main__":
     unittest.main()

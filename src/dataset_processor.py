@@ -2841,8 +2841,10 @@ class AgenticProcessor (DatasetProcessor):
             git_manager = git_utils.get_git_manager(self.prefix)
             volume_name = f"{id}_workspace"
             
-            # Get patches if available
-            patches = ctx.get('patch', {}) if not self.disable_patch else {}
+            # Apply reference patches only for golden runs. Agent runs must
+            # start from the unmodified context even when using a
+            # with_solutions dataset file.
+            patches = ctx.get('patch', {}) if self.golden and not self.disable_patch else {}
             
             # Determine root directory (extract only external/ folder for CVDP repos).
             # _ext_ repos (e.g. cvdp_agentic_heavy_ext_cheriot-ibex) ARE the external code
