@@ -504,6 +504,27 @@ For detailed configuration and implementation details, see [README_DEVELOPER.md]
 - `--force-copilot` - Force non-agentic mode for agentic datasets
 - `--copilot-refine <model>` - Refine datasets with additional model
 
+**Harbor Adapter:**
+- `--harbor-export` - Convert the input CVDP JSONL into Harbor task directories and exit
+- `--harbor-output-dir <dir>` - Harbor output root (default: `datasets/cvdp`)
+- `--harbor-split <auto|no_commercial|commercial>` - Override split detection
+- `--harbor-workspace-hint` - Append workspace-layout hints to Harbor instructions
+- `--harbor-report <job_dir>` - Import Harbor `reward.json` results and generate CVDP reports
+- `--harbor-reward-threshold <score>` - Reward threshold for pass/fail import (default: `1.0`)
+
+These adapter options are available on `run_benchmark.py`.
+
+Example:
+```bash
+python run_benchmark.py -f example_dataset/cvdp_v1.1.0_example_agentic_code_generation_no_commercial.jsonl \
+  --harbor-export --harbor-output-dir datasets/cvdp
+
+harbor run -p datasets/cvdp/no_commercial/cid003 -a claude-code
+
+python run_benchmark.py -f example_dataset/cvdp_v1.1.0_example_agentic_code_generation_no_commercial.jsonl \
+  --harbor-report /path/to/harbor/jobs/<job-name> -p work_harbor
+```
+
 ### `run_samples.py` Options
 
 Supports all `run_benchmark.py` options plus:

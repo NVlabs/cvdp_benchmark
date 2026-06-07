@@ -328,11 +328,21 @@ def benchmark_main():
     
     # Add common arguments shared with run_samples.py
     add_common_arguments(parser)
+    add_harbor_arguments(parser)
 
     args = parser.parse_args()
 
     # Apply common validation checks
     add_validation_checks(args)
+
+    if args.harbor_export and args.harbor_report:
+        parser.error("--harbor-export and --harbor-report cannot be used together")
+
+    # Clean up filename
+    filename = clean_filename(args.filename)
+
+    if args.harbor_export or args.harbor_report:
+        return args, filename, False
 
     # Apply subjective scoring flag from arguments or environment variable
     # TODO: Temporarily hardcoded to True - previously: args.enable_sbj_scoring or ENABLE_SUBJECTIVE_SCORING
@@ -340,15 +350,90 @@ def benchmark_main():
     if use_sbj_scoring:
         os.environ["ENABLE_SUBJECTIVE_SCORING"] = "true"
         print("LLM-based subjective scoring is enabled")
-
-    # Clean up filename
-    filename = clean_filename(args.filename)
     
     return args, filename, use_sbj_scoring
+
+
+def add_harbor_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add Harbor adapter arguments to run_benchmark.py."""
+    harbor = parser.add_argument_group("Harbor adapter")
+    harbor.add_argument("--harbor-export", action="store_true",
+                        help="Convert the input CVDP JSONL into Harbor task directories and exit")
+    harbor.add_argument("--harbor-output-dir", default=os.path.join("datasets", "cvdp"), type=str,
+                        help="Output root for Harbor task directories (default: datasets/cvdp)")
+    harbor.add_argument("--harbor-split", choices=["auto", "no_commercial", "commercial"], default="auto",
+                        help="Harbor split directory to write under, or auto-detect from filename")
+    harbor.add_argument("--harbor-workspace-hint", action="store_true",
+                        help="Append workspace-layout hints to Harbor instructions")
+    harbor.add_argument("--harbor-report", type=str,
+                        help="Import a Harbor job directory and generate CVDP raw_result/report files")
+    harbor.add_argument("--harbor-reward-threshold", default=1.0, type=float,
+                        help="Reward threshold for counting a Harbor trial as passed (default: 1.0)")
+
+
+def run_harbor_export(args: argparse.Namespace, filename: str) -> None:
+    """Run the CVDP-to-Harbor conversion path."""
+    from src.adapters.harbor import convert_dataset
+
+    split = None if args.harbor_split == "auto" else args.harbor_split
+    result = convert_dataset(
+        dataset_path=filename,
+        output_dir=args.harbor_output_dir,
+        split=split,
+        workspace_hint=args.harbor_workspace_hint,
+    )
+
+    print(f"Converted {result.count} Harbor task(s)")
+    print(f"Output: {result.output_dir / result.split}")
+    if result.task_dirs:
+        print(f"First task: {result.task_dirs[0]}")
+
+
+def run_harbor_report(args: argparse.Namespace, filename: str) -> None:
+    """Convert Harbor job results into the normal CVDP report files."""
+    from src.adapters.harbor import build_raw_results_from_harbor_job
+
+    raw_results = build_raw_results_from_harbor_job(
+        job_dir=args.harbor_report,
+        dataset_path=filename,
+        reward_threshold=args.harbor_reward_threshold,
+    )
+    if not raw_results:
+        raise ValueError(
+            "No Harbor trial results matched the input dataset. "
+            "Use the same JSONL file that was converted for the Harbor run."
+        )
+
+    os.makedirs(args.prefix, exist_ok=True)
+    raw_result_path = os.path.join(args.prefix, "raw_result.json")
+    with open(raw_result_path, "w+", encoding="utf-8") as f:
+        json.dump(raw_results, f, indent=2)
+
+    rpt = report.Report(
+        raw_results,
+        prefix=args.prefix,
+        dataset_path=filename,
+        golden_mode=False,
+        disable_patch=None,
+        model_agent="harbor",
+    )
+    rpt.report_header()
+    rpt.report_categories()
+    rpt.report_timers()
+    print(f"Imported Harbor results: {len(raw_results)} task(s)")
+    print(f"Raw results: {raw_result_path}")
 
 if __name__ == "__main__":
 
     args, filename, use_sbj_scoring = benchmark_main()
+
+    if args.harbor_export:
+        run_harbor_export(args, filename)
+        sys.exit(0)
+
+    if args.harbor_report:
+        run_harbor_report(args, filename)
+        sys.exit(0)
 
     # Handle dataset transformation if needed
     if args.force_agentic or args.force_copilot:
