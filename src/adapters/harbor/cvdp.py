@@ -171,11 +171,30 @@ def normalize_instruction_paths(prompt: str) -> str:
     return normalized
 
 
-def dockerfile_variant(split: str) -> str:
-    """Map a split name to the Dockerfile template suffix."""
+def docker_image_config_key(split: str) -> str:
+    """Return the CVDP image config key for a Harbor split."""
     if split == "commercial":
-        return "commercial"
-    return "non_commercial"
+        return "VERIF_EDA_IMAGE"
+    return "OSS_SIM_IMAGE"
+
+
+def configured_docker_image(split: str) -> str:
+    """Read the verifier image from CVDP's central configuration."""
+    from src.config_manager import config
+
+    return config.get(docker_image_config_key(split))
+
+
+def write_docker_environment(env_dir: Path, split: str) -> None:
+    """Write Harbor's thin Docker wrapper around the configured CVDP image."""
+    image = configured_docker_image(split)
+    dockerfile = (
+        f"FROM {image}\n\n"
+        "COPY workspace/ /sandbox/workspace/\n"
+        "WORKDIR /sandbox/workspace/code\n"
+    )
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / "Dockerfile").write_text(dockerfile, encoding="utf-8")
 
 
 def row_to_harbor_fields(row: dict) -> tuple[dict, dict, str]:
@@ -224,13 +243,7 @@ def convert_task(
     shutil.copy2(TEMPLATES_DIR / "task.toml", task_dir / "task.toml")
 
     env_dir = task_dir / "environment"
-    env_dir.mkdir(parents=True, exist_ok=True)
-    variant = dockerfile_variant(split)
-    shutil.copy2(TEMPLATES_DIR / f"Dockerfile.{variant}", env_dir / "Dockerfile")
-
-    compose_template = TEMPLATES_DIR / f"docker-compose.{variant}.yaml"
-    if compose_template.exists():
-        shutil.copy2(compose_template, env_dir / "docker-compose.yaml")
+    write_docker_environment(env_dir, split)
 
     code_dir = env_dir / "workspace" / "code"
     code_dir.mkdir(parents=True, exist_ok=True)
