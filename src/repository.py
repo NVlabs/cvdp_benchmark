@@ -396,6 +396,9 @@ class Repository:
         # Extract project name prefix for filtering (remove timestamp)
         project_prefix = "_".join(project_name.split("_")[:-1])
 
+        harness_home = "/rundir" if "-w /rundir" in cmd else "/code/rundir"
+        harness_env = f"-e HOME={harness_home} -e XDG_CACHE_HOME={harness_home}/.cache"
+
         # Create the docker command with project name
         # line_cmd = f"docker compose -f {docker} -p {project_name} run {cmd} {service}"
         kill_cmd = f"docker compose -f {docker} -p {project_name} kill {service}"
@@ -463,9 +466,9 @@ class Repository:
             script_file.write(f"GROUP_ID=$(id -g)\n\n")
             script_file.write(f"if [ \"$DEBUG_MODE\" = true ]; then\n")
             script_file.write(f"  echo \"DEBUG MODE: Starting container with bash entrypoint\"\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir --entrypoint bash {cmd} {service}\n")
+            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID {harness_env} --entrypoint bash {cmd} {service}\n")
             script_file.write(f"else\n")
-            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID -e HOME=/code/rundir {cmd} {service}\n")
+            script_file.write(f"  docker compose -f {docker} -p {project_name} run --rm --user $USER_ID:$GROUP_ID {harness_env} {cmd} {service}\n")
             script_file.write(f"fi\n")
             script_file.write(f"exit_code=$?\n\n")
             script_file.write(f"# Exit with the same code as the docker command\n")
@@ -591,6 +594,8 @@ class Repository:
                 script_file.write("cat > \"$PATCH_DIR/patch.diff\" << 'PATCH_EOF'\n")
                 if patches:
                     for file_path, patch_body in patches.items():
+                        if not patch_body or not patch_body.strip():
+                            continue
                         # Use same format as GitRepositoryManager: add proper headers
                         filename = f"{root_dir}/{file_path}" if root_dir else file_path
                         script_file.write(f"--- a/{filename}\n")
@@ -687,13 +692,14 @@ class Repository:
         print(f"[INFO]   Create: {create_script_path}")
         print(f"[INFO]   Destroy: {destroy_script_path}")
 
-    def create_agent_script(self, docker_compose_path, agent_image=None):
+    def create_agent_script(self, docker_compose_path, agent_image=None, project_name=None):
         """
         Creates a run_docker_agent.sh script to run the agent in a Docker container.
         
         Args:
             docker_compose_path (str): Path to the docker-compose-agent.yml file
             agent_image (str, optional): Docker image to use for the agent
+            project_name (str, optional): Docker Compose project name to use.
         """
         # Ensure docker_compose_path is absolute
         docker_compose_path = os.path.abspath(docker_compose_path)
@@ -708,8 +714,9 @@ class Repository:
         if not formatted_repo[0].isalnum():
             formatted_repo = 'p' + formatted_repo
         
-        # Create project name with formatted repo name - using bash command for timestamp
-        project_name = f"agent_{formatted_repo}_{self.id}_$(date +%s)"
+        # Create project name with formatted repo name.
+        if project_name is None:
+            project_name = f"agent_{formatted_repo}_{self.id}_$(date +%s)"
         
         # Extract project name prefix for filtering (remove timestamp part)
         project_prefix = f"agent_{formatted_repo}_{self.id}"

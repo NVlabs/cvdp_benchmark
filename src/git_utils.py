@@ -435,6 +435,8 @@ class GitRepositoryManager:
         if patches:
             with open(patch_path, "w", encoding="utf-8", newline='\n') as f:
                 for file_path, patch_body in patches.items():
+                    if not patch_body or not patch_body.strip():
+                        continue
                     filename = f"{root_dir}/{file_path}" if root_dir else file_path
                     f.write(f"--- a/{filename}\n+++ b/{filename}\n{patch_body}\n\n")
         else:

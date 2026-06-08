@@ -172,6 +172,8 @@ class CopilotBenchmark(wrapper.CopilotWrapper):
                 }
             else:
                 result = self.repo.run(issue, obj, repo, self.model)
+                if hasattr(self.repo, '_copy_agent_metadata_to_result'):
+                    self.repo._copy_agent_metadata_to_result(issue, result)
             
             # Only store result in file if the model requires evaluation
             # (e.g., skip for local_export mode which only generates prompts)
@@ -279,6 +281,8 @@ class AgenticBenchmark(wrapper.AgenticWrapper):
                 }
             else:
                 result = self.repo.run(issue, obj, repo, self.model)
+                if hasattr(self.repo, '_copy_agent_metadata_to_result'):
+                    self.repo._copy_agent_metadata_to_result(issue, result)
             
             # Only store result in file if the model requires evaluation
             # (e.g., skip for local_export mode which only generates prompts)
@@ -399,27 +403,24 @@ if __name__ == "__main__":
         if eda_validation['required']:
             print(f"Commercial EDA datasets will also use license network: {eda_validation['network_name']}")
     
-        # Create the network if we're not using an external network manager
+        # Create the default benchmark network if we're not using an external network manager.
+        # Commercial EDA runs still use this default network in addition to the license network.
         if not args.external_network:
+            print("Creating Docker network for all Docker containers in this run...")
+            network_util.create_docker_network(shared_network_name)
+
+            def cleanup_network():
+                print(f"Cleaning up Docker network: {shared_network_name}")
+                network_util.remove_docker_network(shared_network_name)
+
+            atexit.register(cleanup_network)
+            setattr(atexit, "_network_cleanup_registered", True)
+
             if eda_validation['required']:
                 # License network creation and cleanup is handled during EDA validation
                 # Just update our local flag if it was auto-created
                 if eda_validation.get('auto_created', False):
                     license_network_auto_created = True
-            else:
-                # For general benchmark networks, create and manage them
-                print("Creating Docker network for all Docker containers in this run...")
-                network_util.create_docker_network(shared_network_name)
-                
-                # Register cleanup function to remove the network on exit
-                def cleanup_network():
-                    print(f"Cleaning up Docker network: {shared_network_name}")
-                    network_util.remove_docker_network(shared_network_name)
-                
-                # Only register cleanup if we're creating the network
-                atexit.register(cleanup_network)
-                # Mark that we've registered a network cleanup handler
-                setattr(atexit, "_network_cleanup_registered", True)
 
     # Set queue timeout if specified
     if args.queue_timeout is not None:
@@ -436,12 +437,8 @@ if __name__ == "__main__":
         # - Auto-generated networks: respect --external-network flag  
         # - Pre-existing EDA license networks: never manage
         # - Auto-created EDA license networks: manage for cleanup
-        if eda_validation['required']:
-            # For EDA license networks, manage only if we auto-created it
-            manage_network_flag = license_network_auto_created
-        else:
-            # For auto-generated networks, respect the --external-network flag
-            manage_network_flag = not args.external_network
+        # This flag tracks the default benchmark network, not the EDA license network.
+        manage_network_flag = not args.external_network
         
         network_args = {
             'network_name': shared_network_name,

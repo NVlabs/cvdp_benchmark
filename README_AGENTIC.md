@@ -198,6 +198,18 @@ services:
     working_dir: /code
 ```
 
+The runner is agent-neutral and only passes host auth or host files when the user requests it for that run. Use `CVDP_AGENT_ENV` to name host environment variables that should be forwarded into the agent container, and use `CVDP_AGENT_MOUNTS` for semicolon-separated `source:target[:mode]` host mounts:
+
+```bash
+export CVDP_AGENT_ENV=MY_AGENT_API_KEY,MY_AGENT_MODEL
+export CVDP_AGENT_MOUNTS="$HOME/.my-agent/auth.json:/auth/auth.json:ro"
+python run_benchmark.py -f dataset.jsonl -l -g my-agent-image
+```
+
+Agent-specific auth recipes should live with the agent example. For example, a Claude agent can document how to pass `ANTHROPIC_API_KEY`, while another agent can document its own token or host-login file layout without adding policy to the benchmark runner.
+
+For traditional directory-backed datapoints, the runner exposes and accepts changes under project workspace roots discovered from the generated harness directory. Benchmark infrastructure such as `prompt.json`, Dockerfiles, generated compose/scripts, `before/`, `src/`, and `rundir/` remains protected or ignored. Set `CVDP_AGENT_WORKSPACE_ROOTS` to a comma-separated list to override the discovered project roots for custom layouts.
+
 ### Docker Compose for Test Harness
 
 The test harness uses a `docker-compose.yml` file from the dataset, or generates a default:
