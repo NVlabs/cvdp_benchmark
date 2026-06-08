@@ -74,6 +74,9 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your OpenAI API key:
 # OPENAI_USER_KEY=your_api_key_here
+
+# Optional: required for context-heavy agentic datasets:
+# CVDP_HEAVY_REPOS_PATH=/path/to/cvdp_agentic_heavy_repos
 ```
 
 ## 🤖 Try Non-Agentic Workflow (LLM-based)
@@ -189,6 +192,27 @@ cd work_debug/cvdp_agentic_fixed_arbiter_0001/harness/1/
 
 # Run evaluation manually
 ./run_docker_harness_direct.sh
+```
+
+### Heavy Agentic Dataset
+
+The context-heavy agentic problems use the same Docker-based agentic workflow as the other agentic datasets: build your agent image, run with `-l -g <agent-image>`, and use `run_samples.py` for multi-sample Pass@k evaluation. These problems are agentic-only; `--force-copilot` is not supported because the tasks depend on a checked-out git workspace rather than a flat prompt/context bundle.
+
+Download the heavy dataset files from the [🤗 nvidia/cvdp-benchmark-dataset Files and versions tab](https://huggingface.co/datasets/nvidia/cvdp-benchmark-dataset/tree/main):
+
+- `cvdp_v1.1.0_agentic_heavy_code_generation.jsonl` - the JSONL file to pass with `-f`
+- `cvdp_v1.1.0_agentic_heavy_code_generation_public/` - the public heavy agentic git bundle directory
+
+Set `CVDP_HEAVY_REPOS_PATH` in `.env` to the directory containing the bundles downloaded from Hugging Face, named `cvdp_v1.1.0_agentic_heavy_code_generation_public/`:
+
+```bash
+CVDP_HEAVY_REPOS_PATH=/path/to/cvdp_v1.1.0_agentic_heavy_code_generation_public
+```
+
+For each datapoint, the runner resolves the repo name from the JSONL to either `<repo-name>/` or `<repo-name>.bundle` under `CVDP_HEAVY_REPOS_PATH`, preferring an unpacked directory if both exist. The first run creates shared git mirrors under `<work-prefix>/git_cache/` and temporary Docker workspace volumes, so make sure the machine has enough disk space for the bundles, mirrors, and run outputs.
+
+```bash
+./run_samples.py -f /path/to/cvdp_v1.1.0_agentic_heavy_code_generation.jsonl -l -g your-agent-image -n 5 -k 1 -p work_agentic_heavy
 ```
 
 ## 🚀 Next Steps
