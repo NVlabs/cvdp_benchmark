@@ -18,8 +18,13 @@
 import argparse
 from src import report
 from src import wrapper
+import datetime
 import json
 import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
 from src import network_util
 import atexit
 import sys
@@ -335,13 +340,21 @@ def benchmark_main():
     # Apply common validation checks
     add_validation_checks(args)
 
-    if args.harbor_export and args.harbor_report:
-        parser.error("--harbor-export and --harbor-report cannot be used together")
+    harbor_modes = [
+        args.convert_to_harbor,
+        args.run_with_harbor,
+        bool(args.harbor_report),
+    ]
+    if sum(1 for mode in harbor_modes if mode) > 1:
+        parser.error("--convert-to-harbor, --run-with-harbor, and --harbor-report are mutually exclusive")
+
+    if args.run_with_harbor and not (args.harbor_agent or args.agent or args.harbor_agent_import_path):
+        parser.error("--run-with-harbor requires --agent/--harbor-agent or --harbor-agent-import-path")
 
     # Clean up filename
     filename = clean_filename(args.filename)
 
-    if args.harbor_export or args.harbor_report:
+    if args.convert_to_harbor or args.run_with_harbor or args.harbor_report:
         return args, filename, False
 
     # Apply subjective scoring flag from arguments or environment variable
@@ -357,31 +370,74 @@ def benchmark_main():
 def add_harbor_arguments(parser: argparse.ArgumentParser) -> None:
     """Add Harbor adapter arguments to run_benchmark.py."""
     harbor = parser.add_argument_group("Harbor adapter")
-    harbor.add_argument("--harbor-export", action="store_true",
+    harbor.add_argument("--convert-to-harbor", action="store_true",
                         help="Convert the input CVDP JSONL into Harbor task directories and exit")
+    harbor.add_argument("--run-with-harbor", action="store_true",
+                        help="Convert the input CVDP JSONL, run Harbor, and import CVDP report files")
     harbor.add_argument("--harbor-output-dir", default=os.path.join("datasets", "cvdp"), type=str,
                         help="Output root for Harbor task directories (default: datasets/cvdp)")
     harbor.add_argument("--harbor-split", choices=["auto", "no_commercial", "commercial"], default="auto",
                         help="Harbor split directory to write under, or auto-detect from filename")
     harbor.add_argument("--harbor-workspace-hint", action="store_true",
                         help="Append workspace-layout hints to Harbor instructions")
+    harbor.add_argument("--harbor-command", default="uv run harbor", type=str,
+                        help="Command used to invoke Harbor (default: uv run harbor)")
+    harbor.add_argument("--harbor-agent", type=str,
+                        help="Harbor agent name for --run-with-harbor; defaults to --agent")
+    harbor.add_argument("--harbor-agent-import-path", type=str,
+                        help="Custom Harbor agent import path")
+    harbor.add_argument("--harbor-model", type=str,
+                        help="Model name passed to Harbor")
+    harbor.add_argument("--harbor-agent-kwarg", action="append", default=[], metavar="KEY=VALUE",
+                        help="Harbor --ak value; may be repeated")
+    harbor.add_argument("--harbor-env-kwarg", action="append", default=[], metavar="KEY=VALUE",
+                        help="Harbor --ek value; may be repeated")
+    harbor.add_argument("--harbor-n-concurrent", type=int,
+                        help="Concurrent Harbor trials passed as -n")
+    harbor.add_argument("--harbor-n-attempts", type=int,
+                        help="Harbor attempts per trial passed as -k")
+    harbor.add_argument("--harbor-task-name", type=str,
+                        help="Harbor task glob filter passed as --include-task-name")
+    harbor.add_argument("--harbor-exclude-task", type=str,
+                        help="Harbor exclude task glob filter passed as --exclude-task-name")
+    harbor.add_argument("--harbor-n-tasks", type=int,
+                        help="Maximum Harbor tasks passed as -l")
+    harbor.add_argument("--harbor-env", type=str,
+                        help="Harbor environment backend passed as -e")
+    harbor.add_argument("--harbor-timeout-multiplier", type=float,
+                        help="Harbor timeout multiplier")
+    harbor.add_argument("--harbor-jobs-dir", type=str,
+                        help="Harbor jobs root for --run-with-harbor (default: <prefix>/harbor_jobs)")
+    harbor.add_argument("--harbor-job-name", type=str,
+                        help="Harbor job name for --run-with-harbor")
+    harbor.add_argument("--harbor-path", type=str,
+                        help="Run an existing Harbor task/category path instead of generated category directories")
+    harbor.add_argument("--harbor-dry-run", action="store_true",
+                        help="Convert and print Harbor commands without executing them")
+    harbor.add_argument("--harbor-arg", action="append", default=[], metavar="ARG",
+                        help="Additional single Harbor CLI argument; may be repeated")
     harbor.add_argument("--harbor-report", type=str,
                         help="Import a Harbor job directory and generate CVDP raw_result/report files")
     harbor.add_argument("--harbor-reward-threshold", default=1.0, type=float,
                         help="Reward threshold for counting a Harbor trial as passed (default: 1.0)")
 
 
-def run_harbor_export(args: argparse.Namespace, filename: str) -> None:
-    """Run the CVDP-to-Harbor conversion path."""
+def convert_to_harbor_dataset(args: argparse.Namespace, filename: str):
+    """Convert the input CVDP dataset to Harbor task directories."""
     from src.adapters.harbor import convert_dataset
 
     split = None if args.harbor_split == "auto" else args.harbor_split
-    result = convert_dataset(
+    return convert_dataset(
         dataset_path=filename,
         output_dir=args.harbor_output_dir,
         split=split,
         workspace_hint=args.harbor_workspace_hint,
     )
+
+
+def run_convert_to_harbor(args: argparse.Namespace, filename: str) -> None:
+    """Run the CVDP-to-Harbor conversion path."""
+    result = convert_to_harbor_dataset(args, filename)
 
     print(f"Converted {result.count} Harbor task(s)")
     print(f"Output: {result.output_dir / result.split}")
@@ -389,21 +445,8 @@ def run_harbor_export(args: argparse.Namespace, filename: str) -> None:
         print(f"First task: {result.task_dirs[0]}")
 
 
-def run_harbor_report(args: argparse.Namespace, filename: str) -> None:
-    """Convert Harbor job results into the normal CVDP report files."""
-    from src.adapters.harbor import build_raw_results_from_harbor_job
-
-    raw_results = build_raw_results_from_harbor_job(
-        job_dir=args.harbor_report,
-        dataset_path=filename,
-        reward_threshold=args.harbor_reward_threshold,
-    )
-    if not raw_results:
-        raise ValueError(
-            "No Harbor trial results matched the input dataset. "
-            "Use the same JSONL file that was converted for the Harbor run."
-        )
-
+def write_harbor_report(raw_results: dict, args: argparse.Namespace, filename: str, model_agent: str) -> str:
+    """Write normal CVDP report files from Harbor-shaped raw results."""
     os.makedirs(args.prefix, exist_ok=True)
     raw_result_path = os.path.join(args.prefix, "raw_result.json")
     with open(raw_result_path, "w+", encoding="utf-8") as f:
@@ -415,11 +458,165 @@ def run_harbor_report(args: argparse.Namespace, filename: str) -> None:
         dataset_path=filename,
         golden_mode=False,
         disable_patch=None,
-        model_agent="harbor",
+        model_agent=model_agent,
     )
     rpt.report_header()
     rpt.report_categories()
     rpt.report_timers()
+    return raw_result_path
+
+
+def load_harbor_job_results(job_dirs: list[Path], args: argparse.Namespace, filename: str) -> dict:
+    """Load and merge Harbor job outputs into CVDP raw result shape."""
+    from src.adapters.harbor import build_raw_results_from_harbor_job
+
+    raw_results = {}
+    for job_dir in job_dirs:
+        job_results = build_raw_results_from_harbor_job(
+            job_dir=job_dir,
+            dataset_path=filename,
+            reward_threshold=args.harbor_reward_threshold,
+        )
+        duplicates = set(raw_results).intersection(job_results)
+        if duplicates:
+            duplicate_list = ", ".join(sorted(duplicates))
+            raise ValueError(f"Duplicate Harbor results for dataset id(s): {duplicate_list}")
+        raw_results.update(job_results)
+
+    if not raw_results:
+        raise ValueError(
+            "No Harbor trial results matched the input dataset. "
+            "Use the same JSONL file that was converted for the Harbor run."
+        )
+    return raw_results
+
+
+def run_harbor_report(args: argparse.Namespace, filename: str) -> None:
+    """Convert Harbor job results into the normal CVDP report files."""
+    raw_results = load_harbor_job_results(
+        [Path(args.harbor_report)],
+        args=args,
+        filename=filename,
+    )
+    raw_result_path = write_harbor_report(raw_results, args, filename, model_agent="harbor")
+    print(f"Imported Harbor results: {len(raw_results)} task(s)")
+    print(f"Raw results: {raw_result_path}")
+
+
+def harbor_run_paths(conversion_result, args: argparse.Namespace) -> list[Path]:
+    """Return Harbor paths to run after conversion."""
+    if args.harbor_path:
+        return [Path(args.harbor_path)]
+
+    paths = sorted({task_dir.parent for task_dir in conversion_result.task_dirs})
+    if not paths:
+        raise ValueError("No Harbor task directories were generated")
+    return paths
+
+
+def default_harbor_job_name() -> str:
+    """Create a stable Harbor job prefix for this run."""
+    return f"cvdp_harbor_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def safe_harbor_job_suffix(path: Path) -> str:
+    """Create a Harbor-safe suffix from a category path."""
+    suffix = path.name or "tasks"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", suffix)
+
+
+def harbor_command_prefix(command: str) -> list[str]:
+    """Split a Harbor command and ensure it includes the run subcommand."""
+    parts = shlex.split(command)
+    if not parts:
+        raise ValueError("--harbor-command cannot be empty")
+    if parts[-1] != "run":
+        parts.append("run")
+    return parts
+
+
+def build_harbor_run_command(
+    args: argparse.Namespace,
+    harbor_path: Path,
+    jobs_dir: Path,
+    job_name: str,
+) -> list[str]:
+    """Build the `uv run harbor run ...` command."""
+    command = harbor_command_prefix(args.harbor_command)
+    command.extend(["-p", str(harbor_path), "--jobs-dir", str(jobs_dir), "--job-name", job_name])
+
+    harbor_agent = args.harbor_agent or args.agent
+    if harbor_agent:
+        command.extend(["-a", harbor_agent])
+    if args.harbor_agent_import_path:
+        command.extend(["--agent-import-path", args.harbor_agent_import_path])
+    if args.harbor_model:
+        command.extend(["-m", args.harbor_model])
+    if args.harbor_n_concurrent is not None:
+        command.extend(["-n", str(args.harbor_n_concurrent)])
+    if args.harbor_n_attempts is not None:
+        command.extend(["-k", str(args.harbor_n_attempts)])
+    if args.harbor_task_name:
+        command.extend(["--include-task-name", args.harbor_task_name])
+    if args.harbor_exclude_task:
+        command.extend(["--exclude-task-name", args.harbor_exclude_task])
+    if args.harbor_n_tasks is not None:
+        command.extend(["-l", str(args.harbor_n_tasks)])
+    if args.harbor_env:
+        command.extend(["-e", args.harbor_env])
+    if args.harbor_timeout_multiplier is not None:
+        command.extend(["--timeout-multiplier", str(args.harbor_timeout_multiplier)])
+    for kwarg in args.harbor_agent_kwarg:
+        command.extend(["--ak", kwarg])
+    for kwarg in args.harbor_env_kwarg:
+        command.extend(["--ek", kwarg])
+    command.extend(args.harbor_arg)
+    return command
+
+
+def run_with_harbor(args: argparse.Namespace, filename: str) -> None:
+    """Convert CVDP tasks, execute Harbor, and write normal CVDP reports."""
+    conversion_result = convert_to_harbor_dataset(args, filename)
+    run_paths = harbor_run_paths(conversion_result, args)
+    jobs_dir = Path(args.harbor_jobs_dir or os.path.join(args.prefix, "harbor_jobs"))
+    job_name_base = args.harbor_job_name or default_harbor_job_name()
+    multiple_paths = len(run_paths) > 1
+
+    print(f"Converted {conversion_result.count} Harbor task(s)")
+    print(f"Output: {conversion_result.output_dir / conversion_result.split}")
+
+    job_dirs = []
+    for harbor_path in run_paths:
+        job_name = job_name_base
+        if multiple_paths:
+            job_name = f"{job_name_base}_{safe_harbor_job_suffix(harbor_path)}"
+
+        command = build_harbor_run_command(args, harbor_path, jobs_dir, job_name)
+        job_dirs.append(jobs_dir / job_name)
+        print(f"Running Harbor: {shlex.join(command)}")
+
+        if args.harbor_dry_run:
+            continue
+
+        try:
+            subprocess.run(command, check=True)
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"Could not start Harbor command {args.harbor_command!r}. "
+                "The default expects `uv run harbor` to be available."
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Harbor failed with exit code {exc.returncode}: {shlex.join(command)}"
+            ) from exc
+
+    if args.harbor_dry_run:
+        print("Harbor dry run complete; no jobs were executed and no CVDP report was imported")
+        return
+
+    raw_results = load_harbor_job_results(job_dirs, args=args, filename=filename)
+    model_agent = f"harbor:{args.harbor_agent or args.agent}" if (args.harbor_agent or args.agent) else "harbor"
+    raw_result_path = write_harbor_report(raw_results, args, filename, model_agent=model_agent)
     print(f"Imported Harbor results: {len(raw_results)} task(s)")
     print(f"Raw results: {raw_result_path}")
 
@@ -427,8 +624,12 @@ if __name__ == "__main__":
 
     args, filename, use_sbj_scoring = benchmark_main()
 
-    if args.harbor_export:
-        run_harbor_export(args, filename)
+    if args.convert_to_harbor:
+        run_convert_to_harbor(args, filename)
+        sys.exit(0)
+
+    if args.run_with_harbor:
+        run_with_harbor(args, filename)
         sys.exit(0)
 
     if args.harbor_report:

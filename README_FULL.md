@@ -505,10 +505,18 @@ For detailed configuration and implementation details, see [README_DEVELOPER.md]
 - `--copilot-refine <model>` - Refine datasets with additional model
 
 **Harbor Adapter:**
-- `--harbor-export` - Convert the input CVDP JSONL into Harbor task directories and exit
+- `--convert-to-harbor` - Convert the input CVDP JSONL into Harbor task directories and exit
+- `--run-with-harbor` - Convert, execute Harbor, and import CVDP reports in one command
 - `--harbor-output-dir <dir>` - Harbor output root (default: `datasets/cvdp`)
 - `--harbor-split <auto|no_commercial|commercial>` - Override split detection
 - `--harbor-workspace-hint` - Append workspace-layout hints to Harbor instructions
+- `--harbor-command <cmd>` - Harbor command prefix (default: `uv run harbor`)
+- `--harbor-agent <agent>` - Harbor agent name; defaults to `--agent`
+- `--harbor-agent-import-path <path>` - Custom Harbor agent import path
+- `--harbor-model <model>` - Model name passed to Harbor
+- `--harbor-agent-kwarg KEY=VALUE` - Harbor `--ak` value; may be repeated
+- `--harbor-jobs-dir <dir>` - Harbor jobs root for `--run-with-harbor` (default: `<prefix>/harbor_jobs`)
+- `--harbor-job-name <name>` - Harbor job name for `--run-with-harbor`
 - `--harbor-report <job_dir>` - Import Harbor `reward.json` results and generate CVDP reports
 - `--harbor-reward-threshold <score>` - Reward threshold for pass/fail import (default: `1.0`)
 
@@ -517,12 +525,15 @@ These adapter options are available on `run_benchmark.py`.
 Example:
 ```bash
 python run_benchmark.py -f example_dataset/cvdp_v1.1.0_example_agentic_code_generation_no_commercial.jsonl \
-  --harbor-export --harbor-output-dir datasets/cvdp
+  --convert-to-harbor --harbor-output-dir datasets/cvdp
 
-harbor run -p datasets/cvdp/no_commercial/cid003 -a claude-code
+uv run harbor run -p datasets/cvdp/no_commercial/cid003 -a claude-code
 
 python run_benchmark.py -f example_dataset/cvdp_v1.1.0_example_agentic_code_generation_no_commercial.jsonl \
   --harbor-report /path/to/harbor/jobs/<job-name> -p work_harbor
+
+python run_benchmark.py -f example_dataset/cvdp_v1.1.0_example_agentic_code_generation_no_commercial.jsonl \
+  --run-with-harbor -g claude-code -p work_harbor
 ```
 
 ### `run_samples.py` Options
