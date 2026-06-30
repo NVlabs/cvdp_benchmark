@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
 import json
 import tempfile
 import unittest
@@ -89,6 +90,54 @@ class HarborAdapterConversionTest(unittest.TestCase):
             self.assertTrue((task_dir / "instruction.md").is_file())
             self.assertTrue((task_dir / "tests" / "src" / "test_runner.py").is_file())
             self.assertTrue((task_dir / "environment" / "workspace" / "code" / "docs" / "spec.md").is_file())
+
+    def test_extracts_compose_command_into_verifier_plan(self):
+        # A commercial coverage task grades via the docker-compose service
+        # command (a raw simulator invocation), not a test_runner.py. The
+        # converter must flatten that command into the replayable plan, with
+        # container paths remapped and the command base64-encoded.
+        row = {
+            "id": "cvdp_agentic_coverage_0001",
+            "categories": ["cid012", "hard"],
+            "prompt": "Improve coverage",
+            "context": {"rtl/dut.sv": "module dut; endmodule"},
+            "harness": {
+                "docker-compose.yml": (
+                    "services:\n"
+                    "  sim:\n"
+                    "    image: cadence\n"
+                    "    working_dir: /code/rundir\n"
+                    "    env_file: ./src/.env\n"
+                    "    command: xrun -coverage all /src/*.sv /code/verif/*.sv\n"
+                ),
+                "src/.env": "SIM = xcelium\n",
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dataset = Path(tmp) / "cvdp_agentic_code_generation_commercial.jsonl"
+            dataset.write_text(json.dumps(row) + "\n", encoding="utf-8")
+            output = Path(tmp) / "harbor"
+
+            convert_dataset(dataset, output, split="commercial")
+
+            task_dir = output / "commercial" / "cid012" / "coverage_0001"
+            plan_path = task_dir / "tests" / ".harbor_verifier_plan"
+            self.assertTrue(plan_path.is_file())
+            # docker-compose.yml is parsed for the plan, not copied as a harness file.
+            self.assertFalse((task_dir / "tests" / "docker-compose.yml").exists())
+
+            env_file, workdir, command_b64 = (
+                plan_path.read_text(encoding="utf-8").strip().split("\t")
+            )
+            command = base64.b64decode(command_b64).decode()
+            self.assertEqual(workdir, "/sandbox/workspace/code/rundir")
+            self.assertEqual(env_file, "/tests/src/.env")
+            # Container paths remapped into Harbor's layout.
+            self.assertIn("/tests/src/*.sv", command)
+            self.assertIn("/sandbox/workspace/code/verif/*.sv", command)
+            # No -timescale injection on this branch.
+            self.assertNotIn("-timescale", command)
 
 
 class HarborAdapterReportImportTest(unittest.TestCase):

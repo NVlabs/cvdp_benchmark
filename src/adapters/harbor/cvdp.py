@@ -15,6 +15,7 @@ The generated task layout mirrors the Harbor adapter in
 
 from __future__ import annotations
 
+import base64
 import datetime
 import json
 import re
@@ -22,6 +23,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
+
+import yaml
 
 
 ADAPTER_DIR = Path(__file__).resolve().parent
@@ -36,6 +39,12 @@ INSTRUCTION_PATH_REWRITES = (
     ("/code/rundir/", "rundir/"),
     ("/code/", ""),
 )
+HARNESS_PATH_REWRITES = (
+    (r"(?<!\w)/code(?=/|$)", "/sandbox/workspace/code"),
+    (r"(?<!\w)/src(?=/|$)", "/tests/src"),
+    (r"(?<!\w)/rundir(?=/|$)", "/sandbox/workspace/code/rundir"),
+)
+DEFAULT_PLAN_WORKDIR = "/sandbox/workspace/code/rundir"
 
 
 @dataclass
@@ -163,6 +172,83 @@ def remap_env(env_text: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def remap_harness_paths(text: str) -> str:
+    """Remap hidden-harness absolute paths into Harbor container paths.
+
+    Harness files (other than ``.env``) reference the original CVDP container
+    layout (``/code``, ``/src``, ``/rundir``); rewrite those to where Harbor
+    actually mounts them so replayed commands resolve.
+    """
+    remapped = text
+    for pattern, replacement in HARNESS_PATH_REWRITES:
+        remapped = re.sub(pattern, replacement, remapped)
+    return remapped
+
+
+def normalize_compose_path(value: str) -> str:
+    """Convert a docker-compose path value to its verifier-container path."""
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1]
+    value = value.replace("./src/", "/tests/src/")
+    value = value.replace("./src", "/tests/src")
+    return remap_harness_paths(value)
+
+
+def _compose_command_str(command: Any) -> str:
+    """A docker-compose ``command`` may be a string or an exec-form list."""
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    return str(command)
+
+
+def extract_verifier_plan(harness: dict) -> list[tuple[str, str, str]]:
+    """Flatten docker-compose service commands into a replayable plan.
+
+    CVDP grades by running one or more docker-compose services — a cocotb
+    ``test_runner.py`` and, on some commercial tasks, a raw simulator command
+    (e.g. ``xrun``). Harbor does not run docker-compose inside the verifier, so
+    we parse the compose YAML and flatten every service's ``command`` — with its
+    ``env_file`` and ``working_dir`` — into a plan that ``test.sh`` replays in
+    the single verifier container.
+
+    Parsing the YAML (rather than scraping lines) preserves block-scalar
+    commands (``command: >`` / ``command: |``); returned commands may span
+    multiple lines and are base64-encoded when written to the plan file so each
+    record stays on one line.
+    """
+    compose = harness.get("docker-compose.yml")
+    if not compose:
+        return []
+
+    doc = yaml.safe_load(compose)
+    if not isinstance(doc, dict):
+        return []
+
+    plan: list[tuple[str, str, str]] = []
+    for service in (doc.get("services") or {}).values():
+        if not isinstance(service, dict) or "command" not in service:
+            continue
+
+        command = normalize_compose_path(_compose_command_str(service["command"]))
+        if not command:
+            continue
+
+        env_file = service.get("env_file") or ""
+        if isinstance(env_file, list):
+            env_file = env_file[0] if env_file else ""
+        env_file = normalize_compose_path(str(env_file)) if env_file else ""
+
+        workdir = service.get("working_dir")
+        workdir = (
+            normalize_compose_path(str(workdir)) if workdir else DEFAULT_PLAN_WORKDIR
+        )
+
+        plan.append((env_file, workdir, command))
+
+    return plan
+
+
 def normalize_instruction_paths(prompt: str) -> str:
     """Rewrite original ``/code/...`` paths into workspace-relative paths."""
     normalized = prompt
@@ -261,11 +347,31 @@ def convert_task(
     tests_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(TEMPLATES_DIR / "test.sh", tests_dir / "test.sh")
 
+    # CVDP's canonical grading is the docker-compose service command(s). Harbor
+    # can't run docker-compose in the verifier, so flatten them into a plan that
+    # test.sh replays. Without this, commercial coverage tasks whose grading is a
+    # raw simulator command (not a test_runner.py) would never run.
+    verifier_plan = extract_verifier_plan(harness)
+    if verifier_plan:
+        # Commands are base64-encoded so multi-line / quoted commands survive as
+        # a single tab-separated record; env_file and workdir stay plain.
+        plan_lines = [
+            "\t".join(
+                (env_file, workdir, base64.b64encode(command.encode()).decode())
+            )
+            for env_file, workdir, command in verifier_plan
+        ]
+        (tests_dir / ".harbor_verifier_plan").write_text(
+            "\n".join(plan_lines) + "\n", encoding="utf-8"
+        )
+
     for filepath, content in harness.items():
         if filepath in SKIP_HARNESS_FILES or content is None:
             continue
         if Path(filepath).name.startswith(".env"):
             content = remap_env(content)
+        else:
+            content = remap_harness_paths(content)
         dest = tests_dir / filepath
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
