@@ -295,7 +295,11 @@ class Report:
                     # Collect LLM scores for LLM categories (normalized to 0-1)
                     elif 'llm_score' in test:
                         score_value = test['llm_score']
-                    # Other score types can be added here in the future
+                    # Collect Harbor rewards when importing Harbor scorer output
+                    elif 'harbor_score' in test:
+                        score_value = test['harbor_score']
+                    elif 'harbor_reward' in test:
+                        score_value = test['harbor_reward']
                     
                     if score_value is not None:
                         if id not in scores_by_problem:
@@ -428,6 +432,9 @@ class Report:
                     if category_num in BLEU_SCORING_CATEGORIES:
                         self.raw_logs[id]['bleu_scores'] = scores
                         self.raw_logs[id]['avg_bleu_score'] = sum(scores) / len(scores) if scores else 0
+                    elif any('harbor_score' in test or 'harbor_reward' in test for test in self.raw_logs[id].get('tests', [])):
+                        self.raw_logs[id]['harbor_scores'] = scores
+                        self.raw_logs[id]['avg_harbor_score'] = sum(scores) / len(scores) if scores else 0
                     else:
                         # For LLM or other score types
                         self.raw_logs[id]['llm_scores'] = scores
