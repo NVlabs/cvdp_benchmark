@@ -66,7 +66,7 @@ When generating files, return the file name in the correct place at the folder s
             10: "You are solving a 'Question & Answer on Testbench' problem. To solve this problem correctly, you should only respond with a detailed answer to the question about the testbench.",
             12: "You are solving a 'Test Plan to Testbench Stimulus Generation' problem. To solve this problem correctly, you should only respond with the testbench stimulus code generated based on the test plan specification.",
             13: "You are solving a 'Test Plan to Testbench Checker Generation' problem. To solve this problem correctly, you should only respond with the testbench checker code generated based on the test plan specification.",
-            14: "You are solving a 'Test Plan to Assertions Generation' problem. To solve this problem correctly, you should only respond with the assertions for the testbench based on the test plan specification.",
+            14: "You are solving a 'Test Plan to Assertions Generation' problem. To solve this problem correctly, you should respond with the assertions for the testbench based on the test plan specification, and with no explanation or commentary. If the file your response is saved to was given to you in the context, return that whole file with the assertions added, changing only what the assertions require, because your response replaces the file.",
             16: "You are solving an 'RTL Debugging and Bug Fixing' problem. To solve this problem correctly, you should only respond with the RTL code that is debugged and fixed to address the bug."
         }
         if category is not None and category in self.category_guidance:
