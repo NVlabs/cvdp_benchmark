@@ -1115,6 +1115,16 @@ class CopilotProcessor (DatasetProcessor):
             # Add additional instructions based on expected files
             if len(files) == 1:
                 prompt += f"Please provide your response as plain text without any JSON formatting. Your response will be saved directly to: {files[0]}.\n"
+                # When the expected output file is also one of the input files, the
+                # writeback below replaces it whole rather than merging into it.
+                # Say so, or a category whose guidance asks for a fragment -- cid14
+                # asks for the assertions only -- returns that fragment alone and
+                # the rest of the file, typically the design under test, is
+                # silently deleted. Scoped to the single-file case, which is where
+                # cid14 lives; the multi-file writeback has the same hazard and is
+                # deliberately left alone here.
+                if files[0] in context['input']['context']:
+                    prompt += f"{files[0]} is shown above and your response replaces all of it, so return the whole file, with everything you are not changing kept exactly as it is.\n"
             elif len(files) > 1:
                 prompt += f"Name the files as: {files}.\n"
             else:
